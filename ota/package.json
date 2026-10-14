@@ -1,0 +1,13 @@
+{
+  "name": "@rnship/ota",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@expo/fingerprint": "^0.20.14",
+    "@rnship/policy": "workspace:*"
+  }
+}

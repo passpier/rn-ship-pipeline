@@ -1,0 +1,87 @@
+# rnship base policy. Locked rules can't be removed, unlocked, or downgraded by the
+# project layer (.rnship/policy.yaml). Merge rule: effect = max(base, project), deny > require_approval.
+# deps and config_paths matches fire on a change against the approved baseline (M1 `rnship policy check`);
+# files and commands matches fire on contact.
+version: 1
+rules:
+  - id: store.release
+    category: store_release
+    effect: require_approval
+    locked: true
+    match:
+      commands:
+        - "eas submit*"
+        - "eas build --profile production*"
+        - "eas update --channel production*"
+        - "eas update:republish*production*"
+        - "eas update:edit*"
+        - "eas update:rollback*"
+    approval: { binds_to: artifact_digest, ttl: single_use, evidence: [classifier_report, changelog] }
+
+  - id: iap.pricing
+    category: iap_pricing
+    effect: require_approval
+    locked: true
+    match:
+      files: ["store/products.yaml"]
+    approval: { binds_to: artifact_digest, ttl: single_use, evidence: [changelog] }
+
+  - id: payment.sdk
+    category: payment_sdk
+    effect: require_approval
+    locked: true
+    match:
+      deps: ["react-native-purchases", "react-native-iap", "expo-iap", "@stripe/stripe-react-native"]
+    approval: { binds_to: artifact_digest, ttl: single_use, evidence: [baseline_delta] }
+
+  - id: permissions.native
+    category: permissions
+    effect: require_approval
+    locked: true
+    match:
+      config_paths:
+        - "ios.infoPlist./^NS.*UsageDescription$/"
+        - "android.permissions"
+        - "android.blockedPermissions"
+        - "plugins[expo-camera|expo-location|expo-notifications|expo-tracking-transparency|expo-contacts]"
+    approval: { binds_to: artifact_digest, ttl: single_use, evidence: [baseline_delta] }
+
+  - id: deps.upgrade
+    category: dependency_upgrade
+    effect: require_approval
+    locked: true
+    match:
+      deps: ["*"]
+    approval: { binds_to: artifact_digest, ttl: single_use, evidence: [baseline_delta] }
+
+  - id: deps.install
+    category: dependency_upgrade
+    effect: deny
+    locked: true
+    match:
+      commands: ["npx expo install*", "npm i*", "npm install*", "pnpm add*", "yarn add*", "bun add*"]
+
+  - id: keys.signing
+    category: keys_signing
+    effect: deny
+    locked: true
+    match:
+      files: ["**/*.p8", "**/*.p12", "**/*.jks", "**/*.keystore", "**/*.mobileprovision", "credentials.json", ".env*"]
+      commands: ["eas credentials*", "eas env:*", "eas secret*"]
+
+  - id: privacy.data
+    category: privacy_data
+    effect: require_approval
+    locked: true
+    match:
+      config_paths: ["ios.privacyManifests"]
+      deps: ["@react-native-firebase/analytics", "react-native-google-mobile-ads", "posthog-react-native", "@amplitude/*"]
+      files: ["**/sentry*.{ts,js}"]
+    approval: { binds_to: artifact_digest, ttl: single_use, evidence: [baseline_delta] }
+
+  - id: change.scope
+    category: change_scope
+    effect: require_approval
+    locked: true
+    match: {}
+    approval: { binds_to: artifact_digest, ttl: single_use, evidence: [change_folder] }
