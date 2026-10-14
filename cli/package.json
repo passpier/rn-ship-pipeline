@@ -3,6 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "bin": { "rnship": "./src/main.ts" },
-  "dependencies": { "@rnship/ota": "workspace:*", "@rnship/policy": "workspace:*" }
+  "bin": {
+    "rnship": "./src/main.ts"
+  },
+  "dependencies": {
+    "@rnship/ota": "workspace:*",
+    "@rnship/policy": "workspace:*",
+    "@rnship/release": "workspace:*"
+  }
 }

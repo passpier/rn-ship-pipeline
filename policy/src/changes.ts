@@ -10,27 +10,39 @@ export type ProjectState = {
 
 export type Gate = { ruleId: string; category: Rule['category']; effect: Effect; matches: string[] };
 
-// Rules whose deps or config_paths matches differ between two project states. M1's
-// `rnship policy check` passes the approved baseline as `before`; the OTA classifier
-// passes the production build's source.
-export function changedGates(policy: Policy, before: ProjectState, after: ProjectState): Gate[] {
+// Rules whose deps or config_paths matches differ between two project states.
+// `rnship policy check` passes the approved baseline as `before` with
+// `depRemovals: false`, because the baseline is an allowlist and a project needn't
+// use all of it. The OTA classifier passes the production build's source.
+export function changedGates(
+  policy: Policy,
+  before: ProjectState,
+  after: ProjectState,
+  opts: { depRemovals?: boolean } = {},
+): Gate[] {
+  const depRemovals = opts.depRemovals ?? true;
   const gates: Gate[] = [];
   for (const rule of policy.rules) {
     const matches = [
       ...rule.match.config_paths.flatMap((expr) => changedConfigPaths(expr, before.config, after.config)),
-      ...changedDeps(rule.match.deps, before.dependencies, after.dependencies),
+      ...changedDeps(rule.match.deps, before.dependencies, after.dependencies, depRemovals),
     ];
     if (matches.length > 0) gates.push({ ruleId: rule.id, category: rule.category, effect: rule.effect, matches });
   }
   return gates;
 }
 
-function changedDeps(patterns: string[], before: Record<string, string>, after: Record<string, string>): string[] {
+function changedDeps(
+  patterns: string[],
+  before: Record<string, string>,
+  after: Record<string, string>,
+  removals: boolean,
+): string[] {
   if (patterns.length === 0) return [];
   const regexes = patterns.map(globToRegExp);
   const names = new Set([...Object.keys(before), ...Object.keys(after)]);
   return [...names]
-    .filter((name) => before[name] !== after[name] && regexes.some((re) => re.test(name)))
+    .filter((name) => before[name] !== after[name] && (removals || name in after) && regexes.some((re) => re.test(name)))
     .sort()
     .map((name) => `deps:${name}`);
 }

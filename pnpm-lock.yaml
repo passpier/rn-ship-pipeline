@@ -38,6 +38,9 @@ importers:
       '@rnship/policy':
         specifier: workspace:*
         version: link:../policy
+      '@rnship/release':
+        specifier: workspace:*
+        version: link:../release
 
   fixtures/app:
     dependencies:
