@@ -1,0 +1,6 @@
+packages:
+  - policy
+  - ota
+  - cli
+  - fixtures/app
+  - fixtures/extras

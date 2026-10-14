@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake eas: records the call, does nothing else.
+echo "eas $*" >> "$S2_CALLS"
+echo "fake eas: $*"
