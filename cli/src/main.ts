@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { classify, recordBuild } from '@rnship/ota';
 import { compilePolicy, loadBasePolicy, loadPolicy, mergePolicy, type Policy } from '@rnship/policy';
@@ -8,6 +8,8 @@ import { compilePolicy, loadBasePolicy, loadPolicy, mergePolicy, type Policy } f
 const USAGE = `usage:
   rnship policy merge <project-policy.yaml> [--base <base.yaml>]
   rnship policy compile <project-policy.yaml> --out <dir> [--base <base.yaml>] [--codeowner <@handle>]
+      writes settings.json, hook-rules.json, executor-settings.json (pass to every executor run as
+      --settings <file> --setting-sources user), and CODEOWNERS when --codeowner is given
   rnship ota record <project-root> --out <dir> --build-id <id>
   rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]`;
 
@@ -51,10 +53,12 @@ async function main(argv: string[]): Promise<void> {
     case 'policy compile': {
       if (!positionals[0]) throw new UsageError('missing <project-policy.yaml>');
       required(values, 'out');
-      const compiled = compilePolicy(merged(positionals[0], values.base), { codeowner: values.codeowner });
+      const hookRulesPath = resolve(values.out!, 'hook-rules.json');
+      const compiled = compilePolicy(merged(positionals[0], values.base), { codeowner: values.codeowner, hookRulesPath });
       mkdirSync(values.out!, { recursive: true });
       writeFileSync(join(values.out!, 'settings.json'), JSON.stringify(compiled.settings, null, 2) + '\n');
-      writeFileSync(join(values.out!, 'hook-rules.json'), JSON.stringify(compiled.hookRules, null, 2) + '\n');
+      writeFileSync(hookRulesPath, JSON.stringify(compiled.hookRules, null, 2) + '\n');
+      writeFileSync(join(values.out!, 'executor-settings.json'), JSON.stringify(compiled.executorSettings, null, 2) + '\n');
       if (compiled.codeowners) writeFileSync(join(values.out!, 'CODEOWNERS'), compiled.codeowners);
       return;
     }
