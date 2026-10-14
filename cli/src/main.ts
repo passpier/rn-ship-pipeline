@@ -4,7 +4,18 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { classify, recordBuild } from '@rnship/ota';
 import { compilePolicy, loadBasePolicy, loadPolicy, mergePolicy, type Policy } from '@rnship/policy';
-import { ApprovalError, baselineDigest, loadBaseline, stateDir, writeApproval } from '@rnship/release';
+import {
+  ApprovalError,
+  baselineDigest,
+  loadBaseline,
+  mergeApprove,
+  releaseApproveBuild,
+  releaseApproveSubmit,
+  releaseApproveUpdate,
+  stateDir,
+  writeApproval,
+  type ApproveResult,
+} from '@rnship/release';
 import { policyCheck } from './check.ts';
 
 const USAGE = `usage:
@@ -15,6 +26,11 @@ const USAGE = `usage:
   rnship policy check <project-root> --base-ref <sha> [--policy <project-policy.yaml>] [--baseline <approved-baseline.yaml>]
       exit 1 when any gate fires; deps/config rules compare against the approved baseline
   rnship baseline approve <approved-baseline.yaml> [--project <root>]
+  rnship merge approve <sha> --pr <number> [--repo <owner/name>]
+  rnship release approve build <sha> --platform <ios|android|all> [--profile production]
+  rnship release approve submit <build-id> [--profile production]
+  rnship release approve update <group-id> [--rollout 10] [--from-branch staging] [--channel production]
+      approvals run as your user (never rnship-agent) and refuse a digest that doesn't match the artifact
   rnship ota record <project-root> --out <dir> --build-id <id>
   rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]`;
 
@@ -27,6 +43,14 @@ function merged(projectPath: string, basePath?: string): Policy {
     process.exit(1);
   }
   return result.policy;
+}
+
+function approveContext() {
+  return { cwd: process.cwd(), state: stateDir(process.cwd()) };
+}
+
+function approved(result: ApproveResult): void {
+  console.log(`approved ${result.kind} ${result.digest}: ${result.subject}\n${result.record}`);
 }
 
 function required(values: Record<string, unknown>, ...names: string[]): void {
@@ -49,6 +73,13 @@ async function main(argv: string[]): Promise<void> {
       'base-ref': { type: 'string' },
       baseline: { type: 'string' },
       project: { type: 'string' },
+      pr: { type: 'string' },
+      repo: { type: 'string' },
+      platform: { type: 'string' },
+      profile: { type: 'string' },
+      rollout: { type: 'string' },
+      'from-branch': { type: 'string' },
+      channel: { type: 'string' },
     },
   });
 
@@ -87,6 +118,29 @@ async function main(argv: string[]): Promise<void> {
       const digest = baselineDigest(loadBaseline(path));
       const record = writeApproval(stateDir(values.project ?? process.cwd()), { kind: 'baseline', digest, subject: path });
       console.log(`approved baseline ${digest}\n${record}`);
+      return;
+    }
+    case 'merge approve': {
+      if (!positionals[0]) throw new UsageError('missing <sha>');
+      required(values, 'pr');
+      approved(mergeApprove(approveContext(), { sha: positionals[0], pr: values.pr!, repo: values.repo }));
+      return;
+    }
+    case 'release approve': {
+      const [action, digest] = positionals;
+      if (!digest) throw new UsageError('missing <digest>');
+      const ctx = approveContext();
+      if (action === 'build') {
+        required(values, 'platform');
+        approved(releaseApproveBuild(ctx, { sha: digest, platform: values.platform!, profile: values.profile }));
+      } else if (action === 'submit') {
+        approved(releaseApproveSubmit(ctx, { buildId: digest, profile: values.profile }));
+      } else if (action === 'update') {
+        const rollout = values.rollout === undefined ? undefined : Number(values.rollout);
+        approved(releaseApproveUpdate(ctx, { group: digest, rollout, fromBranch: values['from-branch'], channel: values.channel }));
+      } else {
+        throw new UsageError(`unknown release action: ${action ?? '(none)'}`);
+      }
       return;
     }
     case 'ota record': {

@@ -39,7 +39,7 @@ export function assertHumanUser(env: Env = process.env): { uid: number; user: st
   return { uid: me.uid, user: me.username };
 }
 
-function recordPath(dir: string, kind: ApprovalKind, digest: string): string {
+export function approvalPath(dir: string, kind: ApprovalKind, digest: string): string {
   return join(dir, 'approvals', `${kind}-${digest.replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
 }
 
@@ -49,7 +49,7 @@ export function writeApproval(
   env: Env = process.env,
 ): string {
   const approvedBy = assertHumanUser(env);
-  const path = recordPath(dir, approval.kind, approval.digest);
+  const path = approvalPath(dir, approval.kind, approval.digest);
   if (existsSync(path)) throw new ApprovalError(`${approval.kind} ${approval.digest} is already approved (${path}); approvals are single-use`);
   mkdirSync(join(dir, 'approvals'), { recursive: true, mode: 0o755 });
   const record: ApprovalRecord = { ...approval, approved_by: approvedBy, approved_at: new Date().toISOString() };
@@ -60,7 +60,7 @@ export function writeApproval(
 export type ApprovalLookup = { ok: true; record: ApprovalRecord; path: string } | { ok: false; reason: string };
 
 export function findApproval(dir: string, kind: ApprovalKind, digest: string, env: Env = process.env): ApprovalLookup {
-  const path = recordPath(dir, kind, digest);
+  const path = approvalPath(dir, kind, digest);
   if (!existsSync(path)) return { ok: false, reason: `no ${kind} approval for ${digest}` };
   let record: ApprovalRecord;
   try {
