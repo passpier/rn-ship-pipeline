@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { classify, recordBuild } from '@rnship/ota';
-import { compilePolicy, loadBasePolicy, loadPolicy, mergePolicy, type Policy } from '@rnship/policy';
+import { compilePolicy, loadBasePolicy, loadPolicy, mergePolicy, seatbeltProfile, type Policy } from '@rnship/policy';
 import {
   ApprovalError,
   baselineDigest,
@@ -17,6 +18,7 @@ import {
   type ApproveResult,
 } from '@rnship/release';
 import { policyCheck } from './check.ts';
+import { sandboxRun } from './sandbox.ts';
 
 const USAGE = `usage:
   rnship policy merge <project-policy.yaml> [--base <base.yaml>]
@@ -31,6 +33,10 @@ const USAGE = `usage:
   rnship release approve submit <build-id> [--profile production]
   rnship release approve update <group-id> [--rollout 10] [--from-branch staging] [--channel production]
       approvals run as your user (never rnship-agent) and refuse a digest that doesn't match the artifact
+  rnship sandbox profile [--home <dir>]
+  rnship sandbox run [--home <dir>] -- <command...>
+      runs a validation command under sandbox-exec: no secrets, no persistence writes, network only via
+      an allowlisting localhost proxy
   rnship ota record <project-root> --out <dir> --build-id <id>
   rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]`;
 
@@ -80,6 +86,7 @@ async function main(argv: string[]): Promise<void> {
       rollout: { type: 'string' },
       'from-branch': { type: 'string' },
       channel: { type: 'string' },
+      home: { type: 'string' },
     },
   });
 
@@ -141,6 +148,14 @@ async function main(argv: string[]): Promise<void> {
       } else {
         throw new UsageError(`unknown release action: ${action ?? '(none)'}`);
       }
+      return;
+    }
+    case 'sandbox profile': {
+      process.stdout.write(seatbeltProfile({ home: values.home ?? homedir() }));
+      return;
+    }
+    case 'sandbox run': {
+      process.exitCode = await sandboxRun(positionals, { home: values.home ?? homedir() });
       return;
     }
     case 'ota record': {
