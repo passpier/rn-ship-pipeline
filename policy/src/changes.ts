@@ -35,7 +35,7 @@ function changedDeps(patterns: string[], before: Record<string, string>, after: 
     .map((name) => `deps:${name}`);
 }
 
-function globToRegExp(glob: string): RegExp {
+export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${glob.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')).join('.*')}$`);
 }
 

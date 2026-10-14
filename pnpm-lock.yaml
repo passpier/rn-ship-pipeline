@@ -81,8 +81,26 @@ importers:
         specifier: workspace:*
         version: link:../policy
 
+  plugin:
+    devDependencies:
+      '@rnship/policy':
+        specifier: workspace:*
+        version: link:../policy
+
   policy:
     dependencies:
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  release:
+    dependencies:
+      '@rnship/policy':
+        specifier: workspace:*
+        version: link:../policy
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
