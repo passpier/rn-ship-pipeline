@@ -1,0 +1,14 @@
+{
+  "name": "rn-ship-pipeline",
+  "description": "Knowledge plugins from rn-ship-pipeline for building Expo React Native apps.",
+  "owner": {
+    "name": "passpier"
+  },
+  "plugins": [
+    {
+      "name": "rn-game",
+      "source": "./plugins/rn-game",
+      "description": "Building 2D games in Expo-managed React Native apps: Skia rendering, a UI-thread game loop, deterministic simulation, input, persistence, and audio."
+    }
+  ]
+}

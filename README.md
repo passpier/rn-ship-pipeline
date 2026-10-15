@@ -29,7 +29,7 @@ rnship baseline approve .rnship/approved-baseline.yaml   # run as you: approve t
 
 ## Guardrails for the executor
 - **`plugin/`**: a Claude Code plugin whose `PreToolUse` hook (`onFailure: block`) blocks commands and edits that the compiled policy gates. It sees through `sh -c`, `npx eas-cli`, env prefixes, and `$(…)`. It's early feedback, not the gate.
-- **`executor-settings.json`**: pass it to every run as `claude -p --plugin-dir plugin --settings <file> --setting-sources user` (ADR 0002). Otherwise the agent can switch hooks off through project settings (S2).
+- **`executor-settings.json`**: pass it to every run as `claude -p --plugin-dir plugin --settings <file> --setting-sources user` (ADR 0002). Add `--plugin-dir plugins/rn-game` for game apps. The guard is always required, and rn-game is optional. Otherwise the agent can switch hooks off through project settings (S2).
 - **`rnship sandbox run -- <cmd>`**: runs validation commands (tsc, jest, expo export) under `sandbox-exec`. Secrets are unreadable, writes to `~/.claude` and LaunchAgents are refused, and network goes only through an allowlisting localhost proxy.
 
 ## Approvals (run as you, never as `rnship-agent`)
@@ -68,6 +68,7 @@ Recommended runtime policy: `runtimeVersion: { policy: "fingerprint" }`.
 - `ota/`: the classifier
 - `release/`: baseline, approvals, and approve commands
 - `plugin/`: the guard plugin
+- `plugins/rn-game/`: an optional knowledge plugin for building 2D games in Expo apps (skill `rn-2d-game`). It's listed in `.claude-plugin/marketplace.json`, so other projects can install it with `/plugin install rn-game --marketplace passpier/rn-ship-pipeline`.
 - `cli/`: the `rnship` bin, policy check, and the sandbox runner
 - `fixtures/`: the made-up Expo app used by tests
 - `.github/workflows/release-*.yml`: the reusable workflows
