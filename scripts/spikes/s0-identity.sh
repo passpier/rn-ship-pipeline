@@ -184,20 +184,27 @@ finish() {
 # Replace the example below. Set TOTAL_STAGES to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
 
+
 # S0: does identity separation hold? Run as YOUR macOS user (not rnship-agent),
 # from the repo root. Results (pass/fail only, no secrets) go to ENV_FILE;
-# Claude turns them into docs/spikes/S0.md. Plan: §8 S0 and D1.
+# Claude turns them into docs/spikes/S0.md. Plan: §8 S0 and D1, revised 2026-10-15:
+# rnship-agent holds NO GitHub credential. A broker running as you holds a GitHub
+# App's key and does the only writes the agent needs (push agent/*, open PRs).
 #
-# Three stages. The only user switch is one GUI login as rnship-agent (stage 2):
-# you log in and switch straight back. Setup then runs from here, inside that
-# session, via launchctl asuser. To undo everything: scripts/spikes/s0-teardown.sh
+# Four stages. Stage 1 is done if its results pass, and is skipped then. The only
+# user switch is one GUI login as rnship-agent (stage 2). Stage 3 creates the App
+# in your browser. To undo everything: scripts/spikes/s0-teardown.sh
 
 ENV_FILE=docs/spikes/S0.results.env # unconditional: the library already defaulted it to .env
 AGENT=rnship-agent
 PROBE_REPO=passpier/rnship-s6-probe
+APP_NAME=rnship-agent-passpier # App names are global on GitHub
 NODE_VERSION=v24.21.0 # eas-cli 24 needs Node >= 20.18.3; /usr/local has 20.4
 SHARED=/Users/Shared/rnship-s0
-TOTAL_STAGES=3
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+TOKEN_SH="$SCRIPT_DIR/s0-app-token.sh"
+BROKER_SH="$SCRIPT_DIR/s0-broker.sh"
+TOTAL_STAGES=4
 
 GH_BIN=$(command -v gh || true)
 [[ -n "$GH_BIN" ]] || { warn "gh isn't installed for your user; install it first (brew install gh)"; exit 1; }
@@ -205,6 +212,12 @@ gh auth status >/dev/null 2>&1 || { warn "gh isn't logged in for your user; run 
 
 # record KEY VALUE writes a result line.
 record() { write_env "$1" "$2"; }
+
+# set -e stops at any failing step; say where, so a stop is never silent.
+trap 'warn "stopped at line $LINENO: $BASH_COMMAND. Fix it, then re-run to resume."' ERR
+
+# yn CMD... prints yes if CMD succeeds, else no.
+yn() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
 
 # as_agent_can CMD... runs CMD as rnship-agent; success means the agent CAN do it.
 as_agent_can() { sudo -u "$AGENT" -H "$@" >/dev/null 2>&1; }
@@ -224,6 +237,13 @@ import_results() {
   while IFS='=' read -r k v; do [[ -n "$k" ]] && record "S0_$k" "$v"; done < "$1"
 }
 
+# App helpers. Secrets travel in env vars and pipes, never on argv: other users'
+# ps can read argv (stage 4 checks whether it can read env too).
+app_cmd() { RNSHIP_APP_ID=${APP_ID:-} RNSHIP_APP_INSTALLATION_ID=${APP_INSTALLATION_ID:-} "$TOKEN_SH" "$@"; }
+app_token() { app_cmd mint "$@" 2>/dev/null | jq -r '.token // empty'; }
+gh_tok() { local t=$1; shift; [[ -n "$t" ]] || return 1; GH_TOKEN=$t gh "$@"; } # never falls back to your login
+kc_has_key() { security find-generic-password -s rnship-broker-app >/dev/null 2>&1; }
+
 banner "S0 · rnship-agent identity separation"
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
@@ -242,54 +262,67 @@ else
 fi
 id "$AGENT" >/dev/null 2>&1 && record S0_USER_EXISTS yes || { record S0_USER_EXISTS no; warn "no $AGENT user; stopping"; exit 1; }
 AGENT_UID=$(id -u "$AGENT")
-if dseditgroup -o checkmember -m "$AGENT" admin >/dev/null 2>&1; then
-  record S0_USER_IS_ADMIN yes; warn "$AGENT is an admin: make it Standard in System Settings"
-else
-  record S0_USER_IS_ADMIN no
-fi
 
-say "Isolation checks run as $AGENT via sudo. 'no' is the result we want."
-_existing S0_HOME_MODE_BEFORE >/dev/null || record S0_HOME_MODE_BEFORE "$(stat -f %Lp "$HOME")"
-check_files() {
-  record S0_AGENT_LISTS_HOME "$(as_agent_can ls "$HOME" && echo yes || echo no)"
-  for path in .expo .config/gh .config/eas .ssh .claude Library/Keychains; do
-    key="S0_AGENT_READS_$(echo "$path" | tr 'a-z/.' 'A-Z__' | sed 's/^_//')"
-    if [[ -e "$HOME/$path" ]]; then
-      record "$key" "$(as_agent_can ls "$HOME/$path" && echo yes || echo no)"
-    else
-      record "$key" "absent"
-    fi
-  done
+# stage1_passed: an earlier run recorded every isolation check, all passing.
+stage1_passed() {
+  [[ "$(_existing S0_USER_IS_ADMIN || true)" == no \
+    && "$(_existing S0_AGENT_READS_KEYCHAIN_GH || true)" == no \
+    && "$(_existing S0_AGENT_READS_KEYCHAIN_CLAUDE || true)" == no \
+    && "$(_existing S0_AGENT_HAS_EXPO_SESSION || true)" == no ]] \
+    && ! grep -E '^S0_AGENT_(LISTS|READS)_[A-Z_]+=yes$' "$ENV_FILE" >/dev/null
 }
-check_files
-if grep -E '^S0_AGENT_(LISTS|READS)_[A-Z_]+=yes$' "$ENV_FILE" >/dev/null; then
-  warn "The agent can see some of your files. macOS home folders default to 750 (group staff)."
-  if confirm "Run chmod 700 \"$HOME\" and re-check?"; then
-    chmod 700 "$HOME"
-    record S0_HOME_CHMOD_700 applied
-    check_files
+if stage1_passed && ! confirm "The isolation checks already passed. Re-run them?"; then
+  say "Keeping the stage 1 results."
+else
+  if dseditgroup -o checkmember -m "$AGENT" admin >/dev/null 2>&1; then
+    record S0_USER_IS_ADMIN yes; warn "$AGENT is an admin: make it Standard in System Settings"
+  else
+    record S0_USER_IS_ADMIN no
   fi
-fi
 
-KC="$HOME/Library/Keychains/login.keychain-db"
-record S0_AGENT_READS_KEYCHAIN_GH "$(as_agent_can security find-generic-password -s gh:github.com -w "$KC" && echo yes || echo no)"
-record S0_AGENT_READS_KEYCHAIN_CLAUDE "$(as_agent_can security find-generic-password -s 'Claude Code-credentials' -w "$KC" && echo yes || echo no)"
-record S0_AGENT_HAS_EXPO_SESSION "$(as_agent_can test -e "/Users/$AGENT/.expo/state.json" && echo yes || echo no)"
+  say "Isolation checks run as $AGENT via sudo. 'no' is the result we want."
+  _existing S0_HOME_MODE_BEFORE >/dev/null || record S0_HOME_MODE_BEFORE "$(stat -f %Lp "$HOME")"
+  check_files() {
+    record S0_AGENT_LISTS_HOME "$(as_agent_can ls "$HOME" && echo yes || echo no)"
+    for path in .expo .config/gh .config/eas .ssh .claude Library/Keychains; do
+      key="S0_AGENT_READS_$(echo "$path" | tr 'a-z/.' 'A-Z__' | sed 's/^_//')"
+      if [[ -e "$HOME/$path" ]]; then
+        record "$key" "$(as_agent_can ls "$HOME/$path" && echo yes || echo no)"
+      else
+        record "$key" "absent"
+      fi
+    done
+  }
+  check_files
+  if grep -E '^S0_AGENT_(LISTS|READS)_[A-Z_]+=yes$' "$ENV_FILE" >/dev/null; then
+    warn "The agent can see some of your files. macOS home folders default to 750 (group staff)."
+    if confirm "Run chmod 700 \"$HOME\" and re-check?"; then
+      chmod 700 "$HOME"
+      record S0_HOME_CHMOD_700 applied
+      check_files
+    fi
+  fi
+
+  KC="$HOME/Library/Keychains/login.keychain-db"
+  record S0_AGENT_READS_KEYCHAIN_GH "$(as_agent_can security find-generic-password -s gh:github.com -w "$KC" && echo yes || echo no)"
+  record S0_AGENT_READS_KEYCHAIN_CLAUDE "$(as_agent_can security find-generic-password -s 'Claude Code-credentials' -w "$KC" && echo yes || echo no)"
+  record S0_AGENT_HAS_EXPO_SESSION "$(as_agent_can test -e "/Users/$AGENT/.expo/state.json" && echo yes || echo no)"
+fi
 
 # Agent-side scripts. Owned by you in a sticky 1777 dir, so the agent can run
 # them but not change them. They write results back into $SHARED.
 sudo mkdir -p "$SHARED" && sudo chmod 1777 "$SHARED"
+rm -f "$SHARED"/probe-common.sh "$SHARED"/probe-write.sh "$SHARED"/probe-read.sh # the old machine-account probes
 
-{ echo '#!/usr/bin/env bash'; printf 'GH=%q\n' "$GH_BIN"; cat <<'EOS'
+cat > "$SHARED/agent-setup.sh" <<'EOS'
+#!/usr/bin/env bash
 # Fallback for when s0-identity.sh can't reach this user's keychain via launchctl asuser.
 # Run as rnship-agent, in its own Terminal. Results go to /Users/Shared/rnship-s0/agent.out.
 set -u
 [[ "$(id -un)" == rnship-agent ]] || { echo "Run this as rnship-agent, not $(id -un)."; exit 1; }
 OUT=/Users/Shared/rnship-s0/agent.out; : > "$OUT"
 rec() { echo "$1=$2" | tee -a "$OUT"; }
-hr() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
-hr "1/2 · Claude Code"
 export PATH="$HOME/.local/bin:$PATH"
 command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
 CLAUDE=$(command -v claude) || { echo "claude not found after install"; exit 1; }
@@ -306,75 +339,97 @@ probe() { # probe KEY [extra claude args...]
 }
 probe CLAUDE_P_OK
 probe OPUS_ON_PRO --model claude-opus-5-5
-
-hr "2/2 · GitHub machine account"
-[[ -x "$GH" ]] || { echo "gh not found at $GH"; exit 1; }
-if "$GH" auth status >/dev/null 2>&1; then
-  echo "gh is already logged in for this user: $("$GH" api user --jq .login)"
-else
-  echo "1. In the browser that opens, sign up for a SEPARATE GitHub account"
-  echo "   (a +alias email works), e.g. passpier-rnship-bot. If it exists, just sign in as it."
-  open https://github.com/signup
-  read -rp "Press Enter once you're signed in as the machine account… " _
-  echo "2. Create a classic token. Scope: repo ONLY. Leave 'workflow' unchecked."
-  echo "   (Fine-grained tokens can't reach another user's personal repos.)"
-  open "https://github.com/settings/tokens/new?scopes=repo&description=rnship-agent"
-  read -rsp "Paste the token (hidden), then Enter: " TOKEN; echo
-  printf '%s' "$TOKEN" | "$GH" auth login --hostname github.com --with-token || { unset TOKEN; echo "gh auth login failed"; exit 1; }
-  unset TOKEN
-fi
-"$GH" auth setup-git
-rec GH_PATH "$GH"
-rec BOT_LOGIN "$("$GH" api user --jq .login)"
-rec TOKEN_SCOPES "$("$GH" api -i user 2>/dev/null | tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: *//p' | tr -d ' ')"
 rec SETUP_DONE yes
 printf '\n\033[1;32mDone.\033[0m Switch back to your own user. Leave this one logged in.\n'
 EOS
-} > "$SHARED/agent-setup.sh"
 
-cat > "$SHARED/probe-common.sh" <<'EOS'
+cat > "$SHARED/probe-nocred.sh" <<'EOS'
+#!/usr/bin/env bash
+# N1–N3: rnship-agent holds no GitHub credential of any kind. "no" is what we want.
 set -u
-REPO=passpier/rnship-s6-probe
+OUT=/Users/Shared/rnship-s0/nocred.out; : > "$OUT"
 rec() { echo "$1=$2" | tee -a "$OUT"; }
 try() { local key=$1; shift; if "$@" >/dev/null 2>&1; then rec "$key" yes; else rec "$key" no; fi; }
-gh auth status >/dev/null 2>&1 || { echo "gh isn't logged in for this user"; exit 1; }
-ME=$(gh api user --jq .login)
-# Accept any pending invite to the probe repo (the classic repo scope covers this).
-for id in $(gh api user/repository_invitations --jq ".[] | select(.repository.full_name==\"$REPO\") | .id" 2>/dev/null); do
-  gh api -X PATCH "user/repository_invitations/$id" >/dev/null 2>&1 && echo "accepted invite $id"
-done
-W=$(mktemp -d) && cd "$W" && gh repo clone "$REPO" repo >/dev/null 2>&1 && cd repo || { echo "clone failed"; exit 1; }
-git config user.email "$ME@users.noreply.github.com"; git config user.name "$ME"
-B=probe-$(date +%s)
-git switch -qc "$B" && echo "$B" > "probe-$B.txt" && git add . && git commit -qm "probe $B"
+export GIT_TERMINAL_PROMPT=0
+try AGENT_GH_LOGGED_IN gh auth status
+try AGENT_GH_HAS_TOKEN gh auth token
+try AGENT_GH_HOSTS_FILE test -s "$HOME/.config/gh/hosts.yml"
+try AGENT_KEYCHAIN_GH security find-generic-password -s gh:github.com
+try AGENT_KEYCHAIN_GITHUB security find-internet-password -s github.com
+try AGENT_ENV_TOKEN sh -c 'env | grep -qE "^(GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN)="'
+try AGENT_GIT_READS_PROBE git ls-remote https://github.com/passpier/rnship-s6-probe
+try AGENT_API_READS_PROBE gh api repos/passpier/rnship-s6-probe
 EOS
-cat > "$SHARED/probe-write.sh" <<'EOS'
-#!/usr/bin/env bash
-OUT=/Users/Shared/rnship-s0/write.out; : > "$OUT"
-. /Users/Shared/rnship-s0/probe-common.sh
-try WRITE_PUSH_BRANCH git push -q origin "$B"
-PR=$(gh pr create -R "$REPO" --head "$B" --title "probe $B" --body probe 2>/dev/null) && rec WRITE_OPEN_PR yes || rec WRITE_OPEN_PR no
-try WRITE_MERGE_PR gh pr merge "$PR" --merge
-git switch -q main && git pull -q && echo "$B" >> direct.txt && git add . && git commit -qm "direct $B"
-try WRITE_PUSH_MAIN git push -q origin main
-git switch -qc "wf-$B" && mkdir -p .github/workflows && printf 'on: push\njobs: {}\n' > .github/workflows/probe.yml && git add . && git commit -qm "wf $B"
-try WRITE_PUSH_WORKFLOW git push -q origin "wf-$B"
-try WRITE_SEES_PIPELINE gh repo view passpier/rn-ship-pipeline
+
+# B5's title: if the broker ever ran it through a shell, it would create files in its
+# own 0700 dir, where the agent can't plant them.
+B5_TITLE="S0 B5 \$(touch $SHARED/broker-work/pwn) \`touch $SHARED/broker-work/pwn2\`"
+{ echo '#!/usr/bin/env bash'; printf 'BROKER_SH=%q\nB5_TITLE=%q\nYOUR_KC=%q\n' "$BROKER_SH" "$B5_TITLE" "$HOME/Library/Keychains/login.keychain-db"; cat <<'EOS'
+# B1–B8 and N4, as rnship-agent: its only route to GitHub is the broker, which takes
+# agent/* pushes and PRs on two repos and refuses everything else.
+set -u
+S=/Users/Shared/rnship-s0
+OUT=$S/broker.out; : > "$OUT"
+rec() { echo "$1=$2" | tee -a "$OUT"; }
+REPO=passpier/rnship-s6-probe
+W=$(mktemp -d) && cd "$W" || exit 1
+git clone -q "$S/broker-out/rnship-s6-probe.base.bundle" repo 2>/dev/null && cd repo \
+  || { rec AGENT_BROKER_SETUP "no base bundle"; exit 1; }
+git config user.name rnship-agent; git config user.email rnship-agent@localhost
+N=$(date +%s)
+
+# wait_reply ID prints the broker's reply, waiting up to 2 minutes.
+wait_reply() {
+  local i
+  for i in $(seq 60); do [[ -f "$S/broker-out/$1.json" ]] && break; sleep 2; done
+  cat "$S/broker-out/$1.json" 2>/dev/null || echo '{"ok":"no reply"}'
+}
+# submit ID JSON [REVS]: bundle REVS if given, drop the JSON last, print the reply.
+submit() {
+  [[ -n "${3:-}" ]] && git bundle create -q "$S/spool/$1.bundle" $3 2>/dev/null
+  printf '%s' "$2" > "$S/spool/.$1.tmp" && mv "$S/spool/.$1.tmp" "$S/spool/$1.json"
+  wait_reply "$1"
+}
+okof() { jq -r '.ok' <<<"$1" 2>/dev/null || echo "bad reply"; }
+req() { jq -nc --arg op "$1" --arg r "$2" --arg b "$3" '{op: $op, repo: $r, branch: $b}'; }
+pr_req() { jq -nc --arg r "$REPO" --arg b "$1" --arg t "$2" '{op: "pr", repo: $r, branch: $b, title: $t, body: "Opened by rnship-agent through the S0 broker."}'; }
+branch_commit() { git switch -qc "$1" main && mkdir -p "$(dirname "$2")" && echo "$1" > "$2" && git add -A && git commit -qm "$1"; }
+
+branch_commit "agent/b1-$N" "b1-$N.txt"
+rec AGENT_B1_PUSH "$(okof "$(submit "b1-$N" "$(req push "$REPO" "agent/b1-$N")" "origin/main..agent/b1-$N")")"
+r=$(submit "b1pr-$N" "$(pr_req "agent/b1-$N" "S0 B1: PR through the broker")")
+rec AGENT_B1_PR "$(okof "$r")"
+PR=$(jq -r '.pr_url // empty' <<<"$r"); rec AGENT_B1_PR_URL "${PR:-none}"
+if [[ -n "$PR" ]]; then
+  if gh pr merge "$PR" --merge >/dev/null 2>&1; then rec AGENT_N4_MERGE yes; else rec AGENT_N4_MERGE no; fi
+fi
+
+git switch -q main && echo b2 > "b2-$N.txt" && git add -A && git commit -qm b2
+rec AGENT_B2_PUSH_MAIN "$(okof "$(submit "b2-$N" "$(req push "$REPO" main)" origin/main..main)")"
+git reset -q --hard origin/main
+
+branch_commit "agent/b3-$N" ".github/workflows/b3-$N.yml"
+rec AGENT_B3_PUSH_WORKFLOW "$(okof "$(submit "b3-$N" "$(req push "$REPO" "agent/b3-$N")" "origin/main..agent/b3-$N")")"
+
+rec AGENT_B4_OTHER_REPO "$(okof "$(submit "b4-$N" "$(req push passpier/rn-ship-pipeline "agent/b1-$N")" "origin/main..agent/b1-$N")")"
+
+branch_commit "agent/b5-$N" "b5-$N.txt"
+submit "b5-$N" "$(req push "$REPO" "agent/b5-$N")" "origin/main..agent/b5-$N" >/dev/null
+r=$(submit "b5pr-$N" "$(pr_req "agent/b5-$N" "$B5_TITLE")")
+rec AGENT_B5_PR "$(okof "$r")"; rec AGENT_B5_PR_URL "$(jq -r '.pr_url // "none"' <<<"$r")"
+
+ln -s "$S/broker-work/broker.log" "$S/spool/b8-$N.json"
+rec AGENT_B8_SYMLINK_REQUEST "$(okof "$(wait_reply "b8-$N")")"
+
+if security find-generic-password -s rnship-broker-app >/dev/null 2>&1 \
+  || security find-generic-password -s rnship-broker-app "$YOUR_KC" >/dev/null 2>&1; then
+  rec AGENT_READS_BROKER_KEY yes; else rec AGENT_READS_BROKER_KEY no; fi
+if ls "$S/broker-work" >/dev/null 2>&1; then rec AGENT_READS_BROKER_WORK yes; else rec AGENT_READS_BROKER_WORK no; fi
+if touch "$S/broker-out/forged-$N.json" 2>/dev/null; then rec AGENT_WRITES_BROKER_OUT yes; else rec AGENT_WRITES_BROKER_OUT no; fi
+if ( : >> "$BROKER_SH" ) 2>/dev/null; then rec AGENT_WRITES_BROKER_SCRIPT yes; else rec AGENT_WRITES_BROKER_SCRIPT no; fi
 EOS
-cat > "$SHARED/probe-read.sh" <<'EOS'
-#!/usr/bin/env bash
-OUT=/Users/Shared/rnship-s0/read.out; : > "$OUT"
-. /Users/Shared/rnship-s0/probe-common.sh
-try READ_PUSH_UPSTREAM git push -q origin "$B"
-try READ_FORK gh repo fork "$REPO" --clone=false
-sleep 5
-git remote add fork "https://github.com/$ME/rnship-s6-probe.git"
-try READ_PUSH_FORK git push -q fork "$B"
-PR=$(gh pr create -R "$REPO" --head "$ME:$B" --title "fork probe $B" --body probe 2>/dev/null) && rec READ_OPEN_PR yes || rec READ_OPEN_PR no
-try READ_MERGE_PR gh pr merge "$PR" --merge
-git switch -q main && echo "$B" >> direct.txt && git add . && git commit -qm "direct $B"
-try READ_PUSH_MAIN git push -q origin main
-EOS
+} > "$SHARED/probe-broker.sh"
+
 cat > "$SHARED/probe-eas.sh" <<'EOS'
 #!/usr/bin/env bash
 # Acceptance (a): with no Expo session or EXPO_TOKEN, eas submit and eas update to
@@ -387,6 +442,9 @@ unset EXPO_TOKEN
 W=$(mktemp -d) && cd "$W" || exit 1
 cp /Users/Shared/rnship-s0/eas-probe/app.json . || { rec AGENT_EAS_SETUP "no app.json"; exit 1; }
 echo '{"submit":{"production":{}}}' > eas.json
+# Without package.json, eas update stops at "Run this command inside a project
+# directory", before it ever checks credentials.
+echo '{"name":"probe","version":"1.0.0","private":true}' > package.json
 EAS=(npx -y eas-cli@24.13.0)
 probe() { # probe KEY ARGS...: fails-no-auth is the result we want.
   local key=$1 out; shift
@@ -452,14 +510,13 @@ asuser_keychain_ok() {
 # agent_claude_probe KEY [extra claude args...]
 agent_claude_probe() {
   local key=$1 out; shift
-  note "running claude -p $* as $AGENT…"
+  note "running claude -p $* as ${AGENT}…"
   out=$(as_agent_tty "$CLAUDE_PATH" -p 'reply with: ok' --max-turns 1 "$@" </dev/null 2>&1) || true
   if grep -qiw ok <<<"$out"; then record "$key" yes
   else record "$key" "no: $(head -n1 <<<"$out" | tr -d '\r' | cut -c1-200)"; fi
 }
 
 setup_via_asuser() {
-  local token=""
   say "Claude Code opens next, as $AGENT inside its session."
   step "Type /login and choose the Claude subscription option."
   step "It prints a URL: open it in YOUR browser (already on the same Pro account) and approve."
@@ -472,29 +529,6 @@ setup_via_asuser() {
   trap - INT
   agent_claude_probe S0_CLAUDE_P_OK
   agent_claude_probe S0_OPUS_ON_PRO --model claude-opus-5-5
-
-  if as_agent_tty "$GH_BIN" auth status </dev/null >/dev/null 2>&1; then
-    say "gh is already logged in for $AGENT."
-  else
-    say "Now the GitHub machine account. Use a PRIVATE window in your own browser,"
-    say "so your own GitHub login stays out of it."
-    step "Sign up for a SEPARATE account (a +alias email works), e.g. passpier-rnship-bot."
-    note "  If it exists, just sign in as it:  https://github.com/signup"
-    step "In that same window, create a classic token. Scope: repo ONLY, leave 'workflow' unchecked:"
-    note "  https://github.com/settings/tokens/new?scopes=repo&description=rnship-agent"
-    note "  (Fine-grained tokens can't reach another user's personal repos.)"
-    note "  The token is piped straight into $AGENT's keychain; nothing is written to disk."
-    printf '  %sPaste the token (hidden), then Enter:%s ' "$BOLD" "$RESET"
-    read -rs token || true; printf '\n'
-    [[ -n "$token" ]] || { warn "no token entered; re-run this wizard to resume"; exit 1; }
-    printf '%s' "$token" | as_agent_tty "$GH_BIN" auth login --hostname github.com --with-token \
-      || { token=""; warn "gh auth login failed; re-run this wizard to resume"; exit 1; }
-    token=""
-  fi
-  as_agent_tty "$GH_BIN" auth setup-git </dev/null >/dev/null 2>&1 || warn "gh auth setup-git failed for $AGENT"
-  record S0_GH_PATH "$GH_BIN"
-  record S0_BOT_LOGIN "$(as_agent_tty "$GH_BIN" api user --jq .login </dev/null 2>/dev/null)"
-  record S0_TOKEN_SCOPES "$(as_agent_tty "$GH_BIN" api -i user </dev/null 2>/dev/null | tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: *//p' | tr -d ' ')"
 }
 
 # Fallback: the old visit, running agent-setup.sh in the agent's own Terminal.
@@ -503,8 +537,7 @@ setup_in_session() {
   sudo rm -f "$SHARED/agent.out"
   step "Switch to $AGENT (Apple menu → Lock Screen, or the user switcher)."
   step "Open Terminal and run:  $SHARED/agent-setup.sh"
-  note "  It checks Claude Code (/login with the SAME Pro account), claude -p and Opus,"
-  note "  then walks you through the GitHub machine account and its classic token."
+  note "  It checks Claude Code (/login with the SAME Pro account), claude -p and Opus."
   step "When it prints 'Done', switch back here. Leave $AGENT logged in."
   pause "Press Enter when you're back"
   until setup_done; do
@@ -514,8 +547,7 @@ setup_in_session() {
   import_results "$SHARED/agent.out"
 }
 
-if [[ "$(_existing S0_CLAUDE_P_OK || true)" == yes && -n "$(_existing S0_BOT_LOGIN || true)" ]] \
-  && ! confirm "Agent setup already done (bot: $(_existing S0_BOT_LOGIN)). Redo it?"; then
+if [[ "$(_existing S0_CLAUDE_P_OK || true)" == yes ]] && ! confirm "Claude Code is already set up for $AGENT. Redo it?"; then
   say "Keeping the earlier agent setup."
 else
   sudo -v
@@ -531,17 +563,87 @@ else
   fi
 fi
 CLAUDE_PATH=$(_existing S0_AGENT_CLAUDE_PATH || true)
-GH_PATH=$(_existing S0_GH_PATH || true)
-BOT=$(_existing S0_BOT_LOGIN || true)
-[[ -n "$CLAUDE_PATH" && -n "$GH_PATH" && -n "$BOT" ]] || { warn "the results are missing the claude path, gh path or bot login; re-run stage 2"; exit 1; }
-[[ ",$(_existing S0_TOKEN_SCOPES || true)," == *,workflow,* ]] && warn "The bot token has the workflow scope. Recreate it with repo only."
+[[ -n "$CLAUDE_PATH" ]] || { warn "the results are missing the claude path; re-run stage 2"; exit 1; }
+GH_PATH=$GH_BIN
 pause
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
+stage "A GitHub App for the broker (your account, no new email)"
+say "$AGENT gets no GitHub credential. A broker running as you holds this App's key and"
+say "does the only writes the agent needs: push agent/* branches and open PRs."
+APP_ID=$(_existing S0_APP_ID || true)
+APP_SLUG=""
+APP_INSTALLATION_ID=$(_existing S0_APP_INSTALLATION_ID || true)
+
+if [[ -n "$APP_ID" ]] && kc_has_key && APP_SLUG=$(app_cmd app 2>/dev/null | jq -r '.slug // empty') && [[ -n "$APP_SLUG" ]]; then
+  say "App $APP_SLUG (id $APP_ID) is set up, and its key is in your keychain."
+else
+  step "Create the App. The form opens pre-filled: check it, then click Create GitHub App."
+  note "  Webhook: unchecked. Repository permissions: Contents, Issues and Pull requests ="
+  note "  Read and write; Metadata = Read-only. Nothing else, and NOT Workflows."
+  note "  Where can this GitHub App be installed: Only on this account."
+  open_url "https://github.com/settings/apps/new?name=$APP_NAME&url=https://github.com/passpier/rn-ship-pipeline&public=false&webhook_active=false&contents=write&issues=write&pull_requests=write"
+  ask S0_APP_ID "App ID (the app's General page, under About):"
+  [[ "$S0_APP_ID" =~ ^[0-9]+$ ]] || { warn "that isn't a number; re-run this wizard to resume"; exit 1; }
+  APP_ID=$S0_APP_ID
+  record S0_APP_ID "$APP_ID"
+  step "Same page, Private keys → Generate a private key. Your browser downloads a .pem."
+  pause "Press Enter once it has downloaded"
+  pem=$(ls -t "$HOME"/Downloads/*.private-key.pem 2>/dev/null | head -n1 || true)
+  printf '  %sPath to the .pem%s %s[Enter: %s]%s ' "$BOLD" "$RESET" "$DIM" "${pem:-none found}" "$RESET"
+  read -r input || true
+  [[ -n "$input" ]] && pem=${input/#\~/$HOME}
+  openssl rsa -in "$pem" -check -noout >/dev/null 2>&1 || { warn "'$pem' isn't an RSA private key; re-run to resume"; exit 1; }
+  # security -i reads its command from stdin, so the key never appears on argv.
+  printf 'add-generic-password -U -s rnship-broker-app -a %s -w %s\n' "$APP_ID" "$(base64 < "$pem" | tr -d '\n')" \
+    | security -i >/dev/null
+  kc_has_key || { warn "couldn't store the key in your login keychain"; exit 1; }
+  rm -P "$pem" && note "deleted $pem; the key now lives only in your login keychain"
+  APP_SLUG=$(app_cmd app 2>/dev/null | jq -r '.slug // empty')
+  [[ -n "$APP_SLUG" ]] || { warn "GitHub didn't accept a JWT from that key and App ID; check the App ID"; exit 1; }
+fi
+record S0_APP_SLUG "$APP_SLUG"
+APP_PERMS=$(app_cmd app | jq -r '.permissions | to_entries | map("\(.key)=\(.value)") | sort | join(",")')
+record S0_APP_PERMISSIONS "$APP_PERMS"
+[[ "$APP_PERMS" == "contents=write,issues=write,metadata=read,pull_requests=write" ]] \
+  || warn "Expected exactly contents/issues/pull_requests=write and metadata=read. Fix it on the App's Permissions page."
+
+[[ "$APP_INSTALLATION_ID" =~ ^[0-9]+$ ]] || APP_INSTALLATION_ID=$(app_cmd installation 2>/dev/null || true)
+until [[ "$APP_INSTALLATION_ID" =~ ^[0-9]+$ ]]; do
+  step "Install it: Only select repositories → rnship-s6-probe and Spirit-Ripple → Install."
+  open_url "https://github.com/apps/$APP_SLUG/installations/new"
+  pause "Press Enter once it's installed"
+  APP_INSTALLATION_ID=$(app_cmd installation 2>/dev/null || true)
+  [[ "$APP_INSTALLATION_ID" =~ ^[0-9]+$ ]] || confirm "No installation found yet. Check again?" \
+    || { warn "stopping; re-run this wizard to resume"; exit 1; }
+done
+record S0_APP_INSTALLATION_ID "$APP_INSTALLATION_ID"
+T=$(app_token -)
+record S0_APP_INSTALLED_REPOS "$(gh_tok "$T" api /installation/repositories --jq '[.repositories[].full_name] | sort | join(",")' 2>/dev/null || echo unknown)"
+gh_tok "$T" api -X DELETE /installation/token >/dev/null 2>&1 || true
+T=""
+[[ "$(_existing S0_APP_INSTALLED_REPOS)" == "passpier/Spirit-Ripple,passpier/rnship-s6-probe" ]] \
+  || warn "The App should be installed on exactly rnship-s6-probe and Spirit-Ripple. Fix it under Settings → Applications."
+
+say "C1 · Actions token defaults: PR jobs on agent/* branches run agent-written code, so the"
+say "repo's default GITHUB_TOKEN must be read-only and unable to approve PRs."
+for r in "$PROBE_REPO" passpier/Spirit-Ripple; do
+  key="S0_C1_$(echo "${r#*/}" | tr 'a-z-' 'A-Z_')"
+  cur=$(gh api "repos/$r/actions/permissions/workflow" \
+    --jq '"\(.default_workflow_permissions),\(.can_approve_pull_request_reviews)"' 2>/dev/null || echo unknown)
+  if [[ "$cur" != "read,false" ]] && confirm "$r is '$cur'. Set it to read-only with no PR approvals?"; then
+    gh api -X PUT "repos/$r/actions/permissions/workflow" -f default_workflow_permissions=read \
+      -F can_approve_pull_request_reviews=false >/dev/null && cur="read,false"
+  fi
+  record "$key" "$cur"
+done
+pause
+
+# ── 4 ─────────────────────────────────────────────────────────────────────
 stage "Probes from your session (no switching)"
 
 # run_in_agent_session LABEL TIMEOUT CMD... runs CMD once as a LaunchAgent in the
-# agent's GUI session, so it can use the agent's keychain (Claude OAuth, gh token).
+# agent's GUI session, so it can use the agent's keychain (Claude OAuth).
 # Output goes to $SHARED/LABEL.log; succeeds if CMD finished within TIMEOUT seconds.
 run_in_agent_session() {
   local label=$1 timeout=$2; shift 2
@@ -569,7 +671,7 @@ run_in_agent_session() {
 </dict></plist>
 PLIST
   if sudo launchctl bootstrap "gui/$AGENT_UID" "$plist"; then
-    note "waiting up to ${timeout}s for $label…"
+    note "waiting up to ${timeout}s for ${label}…"
     while [[ ! -e "$done" ]] && (( waited < timeout )); do sleep 5; waited=$((waited + 5)); done
   else
     warn "bootstrap failed: is $AGENT still logged in (fast user switching)?"
@@ -596,11 +698,44 @@ run_probe() {
   { sed 's/^/    /' "$SHARED/$1.log" 2>/dev/null || true; } | tail -n 15
 }
 
-say "Runs four jobs inside $AGENT's session via launchd: claude -p, the machine"
-say "account on $PROBE_REPO (Write, then Read), and eas with no Expo credentials."
+# git_app ARGS... is git with the App token $T only, the way the broker does it:
+# your credential helpers and global config are off.
+git_app() {
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+  GIT_CONFIG_COUNT=2 \
+  GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= \
+  GIT_CONFIG_KEY_1=http.https://github.com/.extraheader \
+  GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$T" | base64)" \
+    git "$@"
+}
+
+# run_info SHA EVENT prints "ACTOR job=conclusion,..." for the s0-probe run on SHA,
+# or "no-run" after 4 minutes.
+run_info() {
+  local id="" _
+  for _ in $(seq 48); do
+    id=$(gh api "repos/$PROBE_REPO/actions/runs?head_sha=$1&event=$2" \
+      --jq '[.workflow_runs[] | select(.name == "s0-probe" and .status == "completed")][0].id // empty' 2>/dev/null || true)
+    [[ -n "$id" ]] && break
+    sleep 5
+  done
+  [[ -n "$id" ]] || { echo no-run; return; }
+  printf '%s %s' "$(gh api "repos/$PROBE_REPO/actions/runs/$id" --jq .actor.login)" \
+    "$(gh api "repos/$PROBE_REPO/actions/runs/$id/jobs" --jq '[.jobs[] | "\(.name)=\(.conclusion)"] | sort | join(",")')"
+}
+# job_of INFO JOB prints JOB's conclusion from run_info's output.
+job_of() { tr ' ,' '\n\n' <<<"$1" | sed -n "s/^$2=//p"; }
+
+say "Five jobs:"
+say "  1. claude -p under launchd"
+say "  2. proof that $AGENT holds no GitHub credential"
+say "  3. what the App token itself can do (as you; the agent never sees it)"
+say "  4. the broker, driven by $AGENT"
+say "  5. eas with no Expo credentials"
+note "  3 and 4 push branches, PRs, a probe workflow and two commits to main of $PROBE_REPO."
 confirm "Go ahead?" || { warn "stopping; re-run this wizard to resume"; exit 1; }
 
-say "1/4 · claude -p under launchd"
+say "1/5 · claude -p under launchd"
 if run_in_agent_session claude 120 "$CLAUDE_PATH" -p "reply with: ok" --max-turns 1; then
   { sed 's/^/    /' "$SHARED/claude.log" || true; } | head -n 10
   grep -qiw ok "$SHARED/claude.log" && record S0_LAUNCHAGENT_OK yes || record S0_LAUNCHAGENT_OK no
@@ -608,22 +743,191 @@ else
   record S0_LAUNCHAGENT_OK "no: bootstrap failed or timed out"
 fi
 
-say "2/4 · machine account with Write"
-gh api -X PUT "repos/$PROBE_REPO/collaborators/$BOT" -f permission=push >/dev/null && note "invited $BOT with Write"
-run_probe write "$SHARED/probe-write.sh"
-import_results "$SHARED/write.out"
-record S0_WRITE_EFFECTIVE_PERMISSION "$(gh api "repos/$PROBE_REPO/collaborators/$BOT/permission" --jq .permission 2>/dev/null || echo unknown)"
-note "Expected under D1: MERGE_PR=no, PUSH_MAIN=no, PUSH_WORKFLOW=no, SEES_PIPELINE=no."
+say "2/5 · $AGENT holds no GitHub credential"
+run_probe nocred "$SHARED/probe-nocred.sh"
+import_results "$SHARED/nocred.out"
+note "Wanted: every S0_AGENT_* value above is no."
 
-say "3/4 · machine account with Read + fork"
-gh api -X PUT "repos/$PROBE_REPO/collaborators/$BOT" -f permission=pull >/dev/null && note "asked GitHub for Read"
-record S0_READ_EFFECTIVE_PERMISSION "$(gh api "repos/$PROBE_REPO/collaborators/$BOT/permission" --jq .permission 2>/dev/null || echo unknown)"
-note "GitHub reports $BOT's permission as: $(_existing S0_READ_EFFECTIVE_PERMISSION || true)"
-run_probe read "$SHARED/probe-read.sh"
-import_results "$SHARED/read.out"
-note "Wanted: PUSH_UPSTREAM=no, FORK=yes, PUSH_FORK=yes, OPEN_PR=yes, MERGE_PR=no, PUSH_MAIN=no."
+say "3/5 · What the App token can do (as you)"
+W=$(mktemp -d)
+# The probe workflow, plus a control push to main as you.
+gh repo clone "$PROBE_REPO" "$W/you" -- -q >/dev/null 2>&1 || { warn "couldn't clone $PROBE_REPO"; exit 1; }
+mkdir -p "$W/you/.github/workflows"
+cat > "$W/you/.github/workflows/s0-probe.yml" <<'YAML'
+# S0 probe (scripts/spikes/s0-identity.sh). Throwaway repo.
+name: s0-probe
+on: [push, pull_request]
+jobs:
+  actor:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: echo "actor=${{ github.actor }} event=${{ github.event_name }} ref=${{ github.ref }}"
+  # The M1 release gate: only your pushes to main reach the job that holds EXPO_TOKEN.
+  release-gate:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'passpier'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: echo "the release job would run here"
+  # C2. No permissions key, so this job gets the repo's DEFAULT GITHUB_TOKEN. It
+  # succeeds only if that token can't create a branch.
+  token-write:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: refs/heads/s0-c2-${{ github.run_id }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/git/refs" -d "{\"ref\":\"$REF\",\"sha\":\"$SHA\"}")
+          echo "create-ref with the default GITHUB_TOKEN: HTTP $code"
+          [ "$code" = 403 ] || [ "$code" = 404 ]
+YAML
+date +%s > "$W/you/s0-control.txt"
+git -C "$W/you" add -A && git -C "$W/you" commit -qm "S0: probe workflow and control push" \
+  && git -C "$W/you" push -q origin HEAD:main || { warn "couldn't push the probe workflow"; exit 1; }
+CONTROL_SHA=$(git -C "$W/you" rev-parse HEAD)
 
-say "4/4 · eas as $AGENT, with no Expo credentials"
+J=$(app_cmd mint "$PROBE_REPO" 2>/dev/null || true)
+T=$(jq -r '.token // empty' <<<"$J")
+TALL=$(app_token -)
+[[ -n "$T" && -n "$TALL" ]] || { warn "couldn't mint App tokens"; exit 1; }
+record S0_G10_TOKEN_TTL_MIN $(( ( $(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$(jq -r .expires_at <<<"$J")" +%s) - $(date +%s) ) / 60 ))
+J=""
+
+B="agent/g-$(date +%s)"
+git_app clone -q "https://github.com/$PROBE_REPO.git" "$W/app" 2>/dev/null || { warn "the App token couldn't clone"; exit 1; }
+git -C "$W/app" config user.name "$APP_SLUG[bot]"
+git -C "$W/app" config user.email "$APP_SLUG[bot]@users.noreply.github.com"
+# Content is unique per run (from $B): a re-run must never hit "nothing to commit".
+git -C "$W/app" switch -qc "$B" && echo "$B" > "$W/app/g1.txt" && git -C "$W/app" add -A && git -C "$W/app" commit -qm "G1 $B"
+record S0_G1_APP_PUSH_BRANCH "$(yn git_app -C "$W/app" push -q origin "$B")"
+
+PR_N="" PR_AUTHOR="" PR_SHA=""
+read -r PR_N PR_AUTHOR PR_SHA <<<"$(gh_tok "$T" api -X POST "repos/$PROBE_REPO/pulls" -f title="S0 G2: App token PR" \
+  -f head="$B" -f base=main -f body="Opened by the App token directly." \
+  --jq '"\(.number) \(.user.login) \(.head.sha)"' 2>/dev/null || true)"
+record S0_G2_APP_OPEN_PR "$([[ -n "$PR_N" ]] && echo yes || echo no)"
+record S0_G2_PR_AUTHOR "${PR_AUTHOR:-none}"
+if [[ -n "$PR_N" ]]; then
+  record S0_G3_APP_MERGE_PR "$(yn gh_tok "$T" api -X PUT "repos/$PROBE_REPO/pulls/$PR_N/merge" -f merge_method=merge)"
+fi
+
+git -C "$W/app" switch -q main && git_app -C "$W/app" fetch -q origin main && git -C "$W/app" reset -q --hard origin/main
+echo "$B" > "$W/app/g4.txt" && git -C "$W/app" add -A && git -C "$W/app" commit -qm "G4: App token pushes straight to main ($B)"
+G4_SHA=$(git -C "$W/app" rev-parse HEAD)
+record S0_G4_APP_PUSH_MAIN "$(yn git_app -C "$W/app" push -q origin HEAD:main)"
+
+git -C "$W/app" switch -qc "$B-wf" && mkdir -p "$W/app/.github/workflows" \
+  && printf 'on: push\njobs: {}\n' > "$W/app/.github/workflows/g5.yml" \
+  && git -C "$W/app" add -A && git -C "$W/app" commit -qm "G5: workflow file"
+if out=$(git_app -C "$W/app" push origin "$B-wf" 2>&1); then
+  record S0_G5_APP_PUSH_WORKFLOW yes
+else
+  record S0_G5_APP_PUSH_WORKFLOW "no: $(grep -i workflow <<<"$out" | head -n1 | tr -d '\r' | cut -c1-160)"
+fi
+
+PIPELINE_SHA=$(gh api repos/passpier/rn-ship-pipeline/commits/main --jq .sha)
+if gh_tok "$TALL" api -X POST repos/passpier/rn-ship-pipeline/git/refs -f ref=refs/heads/s0-g6-probe \
+  -f sha="$PIPELINE_SHA" >/dev/null 2>&1; then
+  record S0_G6_APP_WRITES_PIPELINE yes
+  gh api -X DELETE repos/passpier/rn-ship-pipeline/git/refs/heads/s0-g6-probe >/dev/null 2>&1 \
+    || warn "delete branch s0-g6-probe on rn-ship-pipeline by hand"
+else
+  record S0_G6_APP_WRITES_PIPELINE no
+fi
+record S0_G7_DOWNSCOPED_SEES_OTHER "$(yn gh_tok "$T" api repos/passpier/Spirit-Ripple)"
+record S0_G7_CONTROL_UNSCOPED_SEES_OTHER "$(yn gh_tok "$TALL" api repos/passpier/Spirit-Ripple)"
+
+gh_tok "$T" api -X DELETE /installation/token >/dev/null 2>&1 || true
+gh_tok "$TALL" api -X DELETE /installation/token >/dev/null 2>&1 || true
+record S0_G10_REVOKED_TOKEN_WORKS "$(yn gh_tok "$T" api /installation/repositories)"
+T="" TALL=""
+
+note "waiting for the probe workflow runs (up to a few minutes each)…"
+info=$(run_info "$CONTROL_SHA" push)
+record S0_G9_CONTROL_RUN "$info"
+record S0_G9_RELEASE_GATE_ON_YOUR_PUSH "$(job_of "$info" release-gate)"
+info=$(run_info "$G4_SHA" push)
+record S0_G8_APP_PUSH_RUN "$info"
+record S0_G8_APP_PUSH_TRIGGERS "$([[ "$info" == no-run ]] && echo no || echo yes)"
+record S0_G9_RELEASE_GATE_ON_APP_PUSH "$(job_of "$info" release-gate)"
+if [[ -n "$PR_SHA" ]]; then
+  info=$(run_info "$PR_SHA" pull_request)
+  record S0_C2_PR_RUN "$info"
+  case "$(job_of "$info" token-write)" in
+    success) record S0_C2_PR_TOKEN_CAN_WRITE no ;;
+    failure) record S0_C2_PR_TOKEN_CAN_WRITE yes ;;
+    *)       record S0_C2_PR_TOKEN_CAN_WRITE unknown ;;
+  esac
+fi
+rm -rf "$W"
+note "Wanted: G1-G4 yes (why the agent must never hold this token), G5 no, G6 no, G7 no"
+note "(control yes), G8 yes with actor $APP_SLUG[bot], release gate skipped on the App's push"
+note "and success on yours, C2 can-write no, G10 TTL <= 60 and revoked-works no."
+
+say "4/5 · The broker, driven by $AGENT"
+SPOOL=$SHARED/spool BOUT=$SHARED/broker-out BWORK=$SHARED/broker-work
+for d in "$SPOOL" "$BOUT" "$BWORK"; do
+  if [[ -L "$d" ]] || { [[ -e "$d" ]] && [[ "$(stat -f %u "$d")" != "$(id -u)" ]]; }; then
+    warn "$d exists and isn't yours, so something else made it. Stopping."; exit 1
+  fi
+  mkdir -p "$d"
+done
+chmod 1733 "$SPOOL"; chmod 755 "$BOUT"; chmod 700 "$BWORK"
+rm -f "$BWORK"/pwn*
+BROKER_JOB=dev.rnship.s0.broker
+BROKER_PLIST="$HOME/Library/LaunchAgents/$BROKER_JOB.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$BROKER_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$BROKER_JOB</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$BROKER_SH</string></array>
+  <key>WatchPaths</key><array><string>$SPOOL</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$(dirname "$GH_BIN"):/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key><string>$BWORK/launchd.log</string>
+  <key>StandardErrorPath</key><string>$BWORK/launchd.log</string>
+</dict></plist>
+PLIST
+launchctl bootout "gui/$(id -u)/$BROKER_JOB" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$BROKER_PLIST" || { warn "couldn't start the broker job"; exit 1; }
+"$BROKER_SH" --refresh "$PROBE_REPO" || { warn "the broker couldn't build the base bundle"; exit 1; }
+run_probe broker "$SHARED/probe-broker.sh"
+import_results "$SHARED/broker.out"
+launchctl bootout "gui/$(id -u)/$BROKER_JOB" 2>/dev/null || true
+rm -f "$BROKER_PLIST"
+note "The broker job is stopped again: the prototype doesn't stay running."
+
+B1_URL=$(_existing S0_AGENT_B1_PR_URL || true)
+[[ "$B1_URL" == https://* ]] && record S0_B1_PR_AUTHOR "$(gh api "repos/$PROBE_REPO/pulls/${B1_URL##*/}" --jq .user.login 2>/dev/null || echo unknown)"
+B5_URL=$(_existing S0_AGENT_B5_PR_URL || true)
+if [[ "$B5_URL" == https://* ]]; then
+  got=$(gh api "repos/$PROBE_REPO/pulls/${B5_URL##*/}" --jq .title 2>/dev/null || true)
+  record S0_B5_TITLE_LITERAL "$([[ "$got" == "$B5_TITLE" ]] && echo yes || echo no)"
+fi
+record S0_B5_INJECTION_RAN "$(ls "$BWORK"/pwn* >/dev/null 2>&1 && echo yes || echo no)"
+
+# B9: can the agent read your processes' argv and env? Secrets stay off argv either way.
+RNSHIP_S0_CANARY=s0envcanary /bin/sh -c 'sleep 20; :' s0argvcanary &
+CANARY=$!
+sleep 1
+seen=$(sudo -u "$AGENT" ps -E -ww -o command= -p "$CANARY" 2>/dev/null || true)
+record S0_AGENT_SEES_YOUR_ARGV "$([[ "$seen" == *s0argvcanary* ]] && echo yes || echo no)"
+record S0_AGENT_SEES_YOUR_ENV "$([[ "$seen" == *s0envcanary* ]] && echo yes || echo no)"
+kill "$CANARY" 2>/dev/null || true
+note "Wanted: B1 push/PR true with author $APP_SLUG[bot], N4 merge no, B2/B3/B4/B8 false,"
+note "B5 PR true with a literal title and no injection, every READS/WRITES no, SEES_YOUR_ENV no."
+
+say "5/5 · eas as $AGENT, with no Expo credentials"
 AGENT_NODE="/Users/$AGENT/.local/node/bin/node"
 if sudo test -x "$AGENT_NODE"; then
   note "Node is already installed for $AGENT."
@@ -656,4 +960,4 @@ pause
 
 finish
 say "Next: tell Claude 'S0 done'. It reads $ENV_FILE and writes docs/spikes/S0.md."
-say "To undo everything (GitHub access, the $AGENT user, temp files): scripts/spikes/s0-teardown.sh"
+say "To undo everything (the App, probe branches, the $AGENT user, temp files): scripts/spikes/s0-teardown.sh"

@@ -4,12 +4,12 @@
 # Run as YOUR macOS user from anywhere. Every step asks first and is safe to
 # re-run. --dry-run prints what would happen and changes nothing.
 #
-#   1. GitHub: close probe PRs, delete probe branches, remove the bot from the
-#      probe repo (GitHub then deletes its fork of that private repo).
-#   2. Stop rnship-agent's session and launchd jobs.
+#   1. GitHub: close probe PRs, delete probe branches, uninstall the broker's
+#      GitHub App, and delete its private key from your keychain.
+#   2. Stop the broker job and rnship-agent's session and launchd jobs.
 #   3. Delete the rnship-agent macOS user and its home (incl. its keychain).
 #   4. Delete /Users/Shared/rnship-s0 and, optionally, the S0 results file.
-#   5. Print what only you can do in a browser (revoke the bot's token).
+#   5. Print what only you can do in a browser (delete the App itself).
 #
 # Pausing S0 doesn't need this: Ctrl-C the wizard and re-run it later.
 
@@ -19,6 +19,7 @@ cd "$(dirname "$0")/../.."
 DRY=no; [[ "${1:-}" == "--dry-run" ]] && DRY=yes
 PROBE_REPO=passpier/rnship-s6-probe
 RESULTS=docs/spikes/S0.results.env
+BROKER_JOB=dev.rnship.s0.broker
 
 if [[ -t 1 ]]; then B=$'\033[1m'; D=$'\033[2m'; Y=$'\033[33m'; G=$'\033[32m'; R=$'\033[0m'; else B=""; D=""; Y=""; G=""; R=""; fi
 hr()   { printf '\n%s== %s ==%s\n' "$B" "$1" "$R"; }
@@ -45,42 +46,44 @@ fi
 say "rnship-agent: $([[ -n "$AGENT_UID" ]] && echo "uid $AGENT_UID" || echo "not present")"
 
 # ── 1. GitHub ─────────────────────────────────────────────────────────────
-hr "1/5 · GitHub: probe repo $PROBE_REPO"
-BOT=$(grep -E '^S0_BOT_LOGIN=' "$RESULTS" 2>/dev/null | tail -n1 | cut -d= -f2- || true)
-if [[ -z "$BOT" ]]; then
-  printf '  Machine account username (Enter if you never created one): '; read -r BOT || true
-fi
+hr "1/5 · GitHub: probe repo $PROBE_REPO and the broker's App"
+result() { grep -E "^$1=" "$RESULTS" 2>/dev/null | tail -n1 | cut -d= -f2- || true; }
+APP_ID=$(result S0_APP_ID) APP_SLUG=$(result S0_APP_SLUG) APP_INSTALLATION_ID=$(result S0_APP_INSTALLATION_ID)
 if ! gh auth status >/dev/null 2>&1; then
   warn "gh isn't logged in for your user; skipping GitHub cleanup."
 elif ! gh repo view "$PROBE_REPO" >/dev/null 2>&1; then
   say "$PROBE_REPO doesn't exist or isn't visible; nothing to do."
 else
   PRS=$(gh pr list -R "$PROBE_REPO" --state open --json number,headRefName \
-    --jq '.[] | select(.headRefName | test("^(wf-)?probe-")) | .number')
-  REFS=$( { gh api "repos/$PROBE_REPO/git/matching-refs/heads/probe-" --jq '.[].ref'
-            gh api "repos/$PROBE_REPO/git/matching-refs/heads/wf-probe-" --jq '.[].ref'; } 2>/dev/null || true)
+    --jq '.[] | select(.headRefName | test("^(agent/|(wf-)?probe-)")) | .number')
+  REFS=$( { for p in agent/ probe- wf-probe- s0-c2-; do
+              gh api "repos/$PROBE_REPO/git/matching-refs/heads/$p" --jq '.[].ref'
+            done; } 2>/dev/null || true)
   say "open probe PRs: ${PRS:-none}"
   say "probe branches: $(echo "$REFS" | grep -c . || true)"
   if [[ -n "$PRS$REFS" ]] && { [[ $DRY == yes ]] || confirm "Close those PRs and delete those branches?"; }; then
     for n in $PRS; do run gh pr close "$n" -R "$PROBE_REPO" && ok "closed PR #$n"; done
     for ref in $REFS; do run gh api -X DELETE "repos/$PROBE_REPO/git/$ref" && ok "deleted $ref"; done
   fi
-  say "${D}Probe commits pushed straight to main stay; it's a throwaway repo.${R}"
-  if [[ -n "$BOT" ]]; then
-    for id in $(gh api "repos/$PROBE_REPO/invitations" --jq ".[] | select(.invitee.login==\"$BOT\") | .id" 2>/dev/null || true); do
-      run gh api -X DELETE "repos/$PROBE_REPO/invitations/$id" && ok "cancelled invitation $id"
-    done
-    if gh api "repos/$PROBE_REPO/collaborators/$BOT" >/dev/null 2>&1; then
-      ask_run "Remove $BOT from $PROBE_REPO? (its fork of this private repo is deleted too)" \
-        gh api -X DELETE "repos/$PROBE_REPO/collaborators/$BOT"
-    else
-      say "$BOT isn't a collaborator."
-    fi
-  fi
+  say "${D}Probe commits on main and .github/workflows/s0-probe.yml stay; it's a throwaway repo.${R}"
+fi
+if [[ -n "$APP_ID" && -n "$APP_INSTALLATION_ID" ]] && security find-generic-password -s rnship-broker-app >/dev/null 2>&1; then
+  ask_run "Uninstall the App ${APP_SLUG:-$APP_ID} from your account (its tokens stop working)?" \
+    env RNSHIP_APP_ID="$APP_ID" RNSHIP_APP_INSTALLATION_ID="$APP_INSTALLATION_ID" scripts/spikes/s0-app-token.sh uninstall
+else
+  say "No App installation on record, or its key is already gone."
+fi
+if security find-generic-password -s rnship-broker-app >/dev/null 2>&1; then
+  ask_run "Delete the App's private key (rnship-broker-app) from your login keychain?" \
+    security delete-generic-password -s rnship-broker-app
 fi
 
 # ── 2. Stop the agent's session ───────────────────────────────────────────
-hr "2/5 · Stop rnship-agent's session"
+hr "2/5 · Stop the broker and rnship-agent's session"
+if launchctl print "gui/$EUID/$BROKER_JOB" >/dev/null 2>&1; then
+  run launchctl bootout "gui/$EUID/$BROKER_JOB" && ok "stopped the broker job"
+fi
+[[ -e "$HOME/Library/LaunchAgents/$BROKER_JOB.plist" ]] && run rm -f "$HOME/Library/LaunchAgents/$BROKER_JOB.plist"
 if [[ -z "$AGENT_UID" ]]; then
   say "No rnship-agent user; nothing running."
 else
@@ -113,7 +116,7 @@ if [[ -z "$AGENT_UID" ]]; then
   say "Already gone."
 else
   say "Deletes the account and /Users/rnship-agent, including its login keychain"
-  say "(its Claude login and gh token copies). Your own files aren't touched."
+  say "(its Claude login). Your own files aren't touched."
   ask_run "Delete user rnship-agent (uid $AGENT_UID)?" sudo sysadminctl -deleteUser rnship-agent
   if [[ $DRY == no ]]; then
     id rnship-agent >/dev/null 2>&1 && warn "user still exists (check: dscl . -read /Users/rnship-agent)" || ok "user removed"
@@ -127,7 +130,7 @@ fi
 # ── 4. Local files ────────────────────────────────────────────────────────
 hr "4/5 · Local files"
 if [[ -e /Users/Shared/rnship-s0 ]]; then
-  ask_run "Delete /Users/Shared/rnship-s0 (probe scripts and their output)?" sudo rm -rf /Users/Shared/rnship-s0
+  ask_run "Delete /Users/Shared/rnship-s0 (probe scripts, broker spool, mirrors and output)?" sudo rm -rf /Users/Shared/rnship-s0
 else
   say "/Users/Shared/rnship-s0 is already gone."
 fi
@@ -137,11 +140,9 @@ fi
 
 # ── 5. What only you can do ───────────────────────────────────────────────
 hr "5/5 · Left for you (browser)"
-say "• Revoke the bot's token: sign in as ${BOT:-the machine account} (a private window works)"
-say "  → https://github.com/settings/tokens → delete 'rnship-agent'."
-say "  Deleting the macOS user removes the local copy, not the token on GitHub."
-say "• Optional: delete the bot's GitHub account (Settings → Account → Delete), only if you"
-say "  want a different one next time. Re-running S0 can reuse the same account."
+say "• Delete the App, or keep it to re-run S0 (you'd then need a new private key):"
+say "  https://github.com/settings/apps/${APP_SLUG:-<app>}/advanced → Delete GitHub App."
+say "  Uninstalling stops its tokens; the App itself holds no repo access once uninstalled."
 MODE_BEFORE=$(grep -E '^S0_HOME_MODE_BEFORE=' "$RESULTS" 2>/dev/null | tail -n1 | cut -d= -f2- || true)
 say "• Your home folder stays at chmod 700 (recommended). To restore the earlier mode:"
 say "  chmod ${MODE_BEFORE:-750} ~"
