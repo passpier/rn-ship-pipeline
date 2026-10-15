@@ -41,4 +41,4 @@ jobs:
 ```
 
 ## Status
-These workflows are written but not yet exercised. M1 acceptance (e) still has to be checked on a private fixture repo: the caller pinned by SHA, a staging OTA published, source maps uploaded, the job triggered only on push to `main`, and a PR run that shows `EXPO_TOKEN` absent. Until this repo is public, `release-pr-checks.yml`'s checkout of `passpier/rn-ship-pipeline` needs read access from the app repo.
+These workflows are written but not yet exercised. M1 acceptance (e) still has to be checked on a private fixture repo: the caller pinned by SHA, a staging OTA published, source maps uploaded, the job triggered only on push to `main`, and a PR run that shows `EXPO_TOKEN` absent.
