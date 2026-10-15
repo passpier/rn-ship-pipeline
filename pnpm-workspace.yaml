@@ -1,0 +1,8 @@
+packages:
+  - policy
+  - ota
+  - cli
+  - plugin
+  - release
+  - fixtures/app
+  - fixtures/extras

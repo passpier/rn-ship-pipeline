@@ -1,0 +1,75 @@
+# Reusable PR checks for an Expo app repo. Runs agent-written code, so it never
+# receives release credentials: the caller must not pass secrets, and the first step
+# fails the job if EXPO_TOKEN is visible anyway (for example via `secrets: inherit`).
+# Agent PRs come from `agent/*` branches in the same repo, opened by the broker's App,
+# so GitHub would hand them secrets if the caller passed any: that step is the guard.
+name: rnship-pr-checks
+
+on:
+  workflow_call:
+    inputs:
+      rnship-sha:
+        description: Commit of passpier/rn-ship-pipeline to run `rnship` from. Use the same SHA the caller pins this workflow to.
+        type: string
+        required: true
+      install-command:
+        type: string
+        default: npm ci
+      validate-command:
+        description: The app's own checks (typecheck, lint, jest).
+        type: string
+        default: npx tsc --noEmit && npx eslint . && npx jest --ci
+      working-directory:
+        type: string
+        default: .
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: app/${{ inputs.working-directory }}
+    steps:
+      - name: Assert no release credentials
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        working-directory: .
+        run: |
+          if [ -n "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN is visible to PR checks. Don't pass secrets to this workflow."
+            exit 1
+          fi
+          echo "EXPO_TOKEN is absent"
+      # Third-party actions are pinned by commit SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: app
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: passpier/rn-ship-pipeline
+          ref: ${{ inputs.rnship-sha }}
+          path: rnship
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install rnship
+        working-directory: rnship
+        run: corepack enable && pnpm install --frozen-lockfile
+      - name: Install app dependencies
+        run: ${{ inputs.install-command }}
+      - name: App checks
+        run: ${{ inputs.validate-command }}
+      - name: Expo doctor
+        run: npx expo-doctor
+      # Approval records live on the release Mac, not in the repo, so here deps and
+      # config rules fire on any contact with package.json or app config (fail closed).
+      - name: rnship policy check
+        run: node "$GITHUB_WORKSPACE/rnship/cli/src/main.ts" policy check . --base-ref "${{ github.event.pull_request.base.sha || 'HEAD~1' }}"

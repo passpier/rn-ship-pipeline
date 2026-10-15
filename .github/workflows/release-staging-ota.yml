@@ -1,0 +1,75 @@
+# Reusable staging OTA for an Expo app repo: publishes an EAS Update to the staging
+# branch, then uploads its source maps to Sentry. EXPO_TOKEN is effectively a
+# production credential (D1), so this runs only for a push to main, which happens
+# after `rnship merge approve`. Production is never published from CI: promote with
+# `rnship release approve update <group-id>` on the release Mac.
+#
+# Actor gate (D1 backstop): the broker's GitHub App token can push to main on a Free
+# private repo, and that push triggers `on: push` as `rnship-agent[bot]` (S0 G8). The job
+# runs only when you both pushed and triggered the run, so a bot push, or your re-run of
+# one, is skipped before any step or checkout (S0 G9).
+name: rnship-staging-ota
+
+on:
+  workflow_call:
+    inputs:
+      release-actor:
+        description: The GitHub login allowed to publish (yours). Pushes and re-runs by anyone else skip the job.
+        type: string
+        required: true
+      install-command:
+        type: string
+        default: npm ci
+      working-directory:
+        type: string
+        default: .
+      sentry-org:
+        type: string
+        default: ''
+      sentry-project:
+        type: string
+        default: ''
+    secrets:
+      EXPO_TOKEN:
+        required: true
+      SENTRY_AUTH_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  staging-ota:
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.actor == inputs.release-actor && github.triggering_actor == inputs.release-actor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      # Third-party actions are pinned by commit SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install app dependencies
+        run: ${{ inputs.install-command }}
+      - name: Publish staging update
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas-cli@24.13.0 update --branch staging --message "${GITHUB_SHA}" --non-interactive --json > eas-update.json
+          node -e 'const u=require("./eas-update.json"); console.log(`update group ${u[0].group} from ${u[0].gitCommitHash}`)'
+      - name: Upload source maps to Sentry
+        if: inputs.sentry-org != '' && inputs.sentry-project != ''
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ inputs.sentry-org }}
+          SENTRY_PROJECT: ${{ inputs.sentry-project }}
+        # Command name from @sentry/react-native's Expo docs; S9 confirms symbolication.
+        run: npx sentry-expo-upload-sourcemaps dist

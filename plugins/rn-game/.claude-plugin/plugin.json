@@ -1,0 +1,8 @@
+{
+  "name": "rn-game",
+  "version": "0.1.0",
+  "description": "Development knowledge for 2D games in Expo-managed React Native apps. Knowledge only: it has no hooks and blocks nothing.",
+  "author": {
+    "name": "passpier"
+  }
+}
