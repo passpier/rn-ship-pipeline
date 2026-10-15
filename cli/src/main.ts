@@ -1,13 +1,42 @@
 #!/usr/bin/env node
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { classify, recordBuild } from '@rnship/ota';
-import { compilePolicy, loadBasePolicy, loadPolicy, mergePolicy, type Policy } from '@rnship/policy';
+import { compilePolicy, loadBasePolicy, loadPolicy, mergePolicy, seatbeltProfile, type Policy } from '@rnship/policy';
+import {
+  ApprovalError,
+  baselineDigest,
+  loadBaseline,
+  mergeApprove,
+  releaseApproveBuild,
+  releaseApproveSubmit,
+  releaseApproveUpdate,
+  stateDir,
+  writeApproval,
+  type ApproveResult,
+} from '@rnship/release';
+import { policyCheck } from './check.ts';
+import { sandboxRun } from './sandbox.ts';
 
 const USAGE = `usage:
   rnship policy merge <project-policy.yaml> [--base <base.yaml>]
   rnship policy compile <project-policy.yaml> --out <dir> [--base <base.yaml>] [--codeowner <@handle>]
+      writes settings.json, hook-rules.json, executor-settings.json (pass to every executor run as
+      --settings <file> --setting-sources user), and CODEOWNERS when --codeowner is given
+  rnship policy check <project-root> --base-ref <sha> [--policy <project-policy.yaml>] [--baseline <approved-baseline.yaml>]
+      exit 1 when any gate fires; deps/config rules compare against the approved baseline
+  rnship baseline approve <approved-baseline.yaml> [--project <root>]
+  rnship merge approve <sha> --pr <number> [--repo <owner/name>]
+  rnship release approve build <sha> --platform <ios|android|all> [--profile production]
+  rnship release approve submit <build-id> [--profile production]
+  rnship release approve update <group-id> [--rollout 10] [--from-branch staging] [--channel production]
+      approvals run as your user (never rnship-agent) and refuse a digest that doesn't match the artifact
+  rnship sandbox profile [--home <dir>]
+  rnship sandbox run [--home <dir>] -- <command...>
+      runs a validation command under sandbox-exec: no secrets, no persistence writes, network only via
+      an allowlisting localhost proxy
   rnship ota record <project-root> --out <dir> --build-id <id>
   rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]`;
 
@@ -20,6 +49,14 @@ function merged(projectPath: string, basePath?: string): Policy {
     process.exit(1);
   }
   return result.policy;
+}
+
+function approveContext() {
+  return { cwd: process.cwd(), state: stateDir(process.cwd()) };
+}
+
+function approved(result: ApproveResult): void {
+  console.log(`approved ${result.kind} ${result.digest}: ${result.subject}\n${result.record}`);
 }
 
 function required(values: Record<string, unknown>, ...names: string[]): void {
@@ -39,6 +76,17 @@ async function main(argv: string[]): Promise<void> {
       artifacts: { type: 'string' },
       candidate: { type: 'string' },
       policy: { type: 'string' },
+      'base-ref': { type: 'string' },
+      baseline: { type: 'string' },
+      project: { type: 'string' },
+      pr: { type: 'string' },
+      repo: { type: 'string' },
+      platform: { type: 'string' },
+      profile: { type: 'string' },
+      rollout: { type: 'string' },
+      'from-branch': { type: 'string' },
+      channel: { type: 'string' },
+      home: { type: 'string' },
     },
   });
 
@@ -51,11 +99,63 @@ async function main(argv: string[]): Promise<void> {
     case 'policy compile': {
       if (!positionals[0]) throw new UsageError('missing <project-policy.yaml>');
       required(values, 'out');
-      const compiled = compilePolicy(merged(positionals[0], values.base), { codeowner: values.codeowner });
+      const hookRulesPath = resolve(values.out!, 'hook-rules.json');
+      const compiled = compilePolicy(merged(positionals[0], values.base), { codeowner: values.codeowner, hookRulesPath });
       mkdirSync(values.out!, { recursive: true });
       writeFileSync(join(values.out!, 'settings.json'), JSON.stringify(compiled.settings, null, 2) + '\n');
-      writeFileSync(join(values.out!, 'hook-rules.json'), JSON.stringify(compiled.hookRules, null, 2) + '\n');
+      writeFileSync(hookRulesPath, JSON.stringify(compiled.hookRules, null, 2) + '\n');
+      writeFileSync(join(values.out!, 'executor-settings.json'), JSON.stringify(compiled.executorSettings, null, 2) + '\n');
       if (compiled.codeowners) writeFileSync(join(values.out!, 'CODEOWNERS'), compiled.codeowners);
+      return;
+    }
+    case 'policy check': {
+      const root = positionals[0];
+      if (!root) throw new UsageError('missing <project-root>');
+      required(values, 'base-ref');
+      const projectPolicy = values.policy ?? join(root, '.rnship', 'policy.yaml');
+      const policy = values.policy || existsSync(projectPolicy) ? merged(projectPolicy, values.base) : loadBasePolicy();
+      const result = policyCheck({ root, baseRef: values['base-ref']!, policy, baselinePath: values.baseline });
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exit(1);
+      return;
+    }
+    case 'baseline approve': {
+      const path = positionals[0];
+      if (!path) throw new UsageError('missing <approved-baseline.yaml>');
+      const digest = baselineDigest(loadBaseline(path));
+      const record = writeApproval(stateDir(values.project ?? process.cwd()), { kind: 'baseline', digest, subject: path });
+      console.log(`approved baseline ${digest}\n${record}`);
+      return;
+    }
+    case 'merge approve': {
+      if (!positionals[0]) throw new UsageError('missing <sha>');
+      required(values, 'pr');
+      approved(mergeApprove(approveContext(), { sha: positionals[0], pr: values.pr!, repo: values.repo }));
+      return;
+    }
+    case 'release approve': {
+      const [action, digest] = positionals;
+      if (!digest) throw new UsageError('missing <digest>');
+      const ctx = approveContext();
+      if (action === 'build') {
+        required(values, 'platform');
+        approved(releaseApproveBuild(ctx, { sha: digest, platform: values.platform!, profile: values.profile }));
+      } else if (action === 'submit') {
+        approved(releaseApproveSubmit(ctx, { buildId: digest, profile: values.profile }));
+      } else if (action === 'update') {
+        const rollout = values.rollout === undefined ? undefined : Number(values.rollout);
+        approved(releaseApproveUpdate(ctx, { group: digest, rollout, fromBranch: values['from-branch'], channel: values.channel }));
+      } else {
+        throw new UsageError(`unknown release action: ${action ?? '(none)'}`);
+      }
+      return;
+    }
+    case 'sandbox profile': {
+      process.stdout.write(seatbeltProfile({ home: values.home ?? homedir() }));
+      return;
+    }
+    case 'sandbox run': {
+      process.exitCode = await sandboxRun(positionals, { home: values.home ?? homedir() });
       return;
     }
     case 'ota record': {
@@ -81,6 +181,10 @@ async function main(argv: string[]): Promise<void> {
 }
 
 main(process.argv.slice(2)).catch((error: unknown) => {
+  if (error instanceof ApprovalError) {
+    console.error(`rnship: ${error.message}`);
+    process.exit(1);
+  }
   if (error instanceof UsageError) {
     console.error(`rnship: ${error.message}\n${USAGE}`);
     process.exit(2);

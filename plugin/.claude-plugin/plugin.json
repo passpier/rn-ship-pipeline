@@ -1,0 +1,5 @@
+{
+  "name": "rnship",
+  "version": "0.1.0",
+  "description": "rn-ship-pipeline guardrails: a PreToolUse hook that blocks commands and edits the compiled policy gates."
+}

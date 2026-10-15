@@ -55,6 +55,22 @@ describe('rnship policy', () => {
     const hookRules = JSON.parse(readFileSync(join(out, 'hook-rules.json'), 'utf8'));
     expect(hookRules.rules.map((r: { id: string }) => r.id)).toContain('payment.sdk');
   });
+
+  it('compile writes executor settings that pin hooks on, force-enable the guard, and lock the sandbox', () => {
+    const out = mkdtempSync(join(tmpdir(), 'rnship-compile-'));
+    const project = projectPolicy('version: 1\nrules: []\n');
+
+    rnship('policy', 'compile', project, '--out', out);
+
+    const settings = JSON.parse(readFileSync(join(out, 'executor-settings.json'), 'utf8'));
+    expect(settings).toMatchObject({
+      disableAllHooks: false,
+      enabledPlugins: { 'rnship@inline': true },
+      env: { RNSHIP_HOOK_RULES: join(out, 'hook-rules.json') },
+      sandbox: { enabled: true, allowUnsandboxedCommands: false, filesystem: { denyRead: expect.arrayContaining(['~/.expo']) } },
+    });
+    expect(settings.permissions.deny).toContain('Bash(eas credentials*)');
+  });
 });
 
 describe('rnship ota', () => {
