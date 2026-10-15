@@ -35,6 +35,7 @@ rnship baseline approve .rnship/approved-baseline.yaml   # run as you: approve t
 ## Approvals (run as you, never as `rnship-agent`)
 ```sh
 rnship merge approve <sha> --pr <n>                    # PR head must equal <sha>; merges with --match-head-commit
+                     [--accept-main <sha>]             # refuses if main moved since the last merge approve, until you vouch
 rnship release approve build <sha> --platform all      # clean checkout at <sha> → eas build --profile production
 rnship release approve submit <build-id>               # finished production build → eas submit
 rnship release approve update <group-id> --rollout 10  # staging group built from HEAD → production at 10%

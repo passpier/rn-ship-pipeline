@@ -1,7 +1,8 @@
 # Reusable PR checks for an Expo app repo. Runs agent-written code, so it never
 # receives release credentials: the caller must not pass secrets, and the first step
 # fails the job if EXPO_TOKEN is visible anyway (for example via `secrets: inherit`).
-# PRs from the machine account's fork get no secrets from GitHub either.
+# Agent PRs come from `agent/*` branches in the same repo, opened by the broker's App,
+# so GitHub would hand them secrets if the caller passed any: that step is the guard.
 name: rnship-pr-checks
 
 on:
@@ -28,6 +29,8 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: app/${{ inputs.working-directory }}

@@ -23,11 +23,23 @@ describe('reusable release workflows', () => {
     const wf = load('release-staging-ota.yml');
     expect(Object.keys(wf.on)).toEqual(['workflow_call']);
     const job = wf.jobs['staging-ota'];
-    expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main'");
+    expect(job.if).toBe(
+      "github.event_name == 'push' && github.ref == 'refs/heads/main' && " +
+        'github.actor == inputs.release-actor && github.triggering_actor == inputs.release-actor',
+    );
+    expect(wf.on.workflow_call.inputs['release-actor']).toMatchObject({ type: 'string', required: true });
     const script = job.steps.map((s: { run?: string }) => s.run ?? '').join('\n');
     expect(script).toContain('update --branch staging');
     expect(script).not.toContain('production');
     expect(script).toContain('sentry-expo-upload-sourcemaps dist');
     expect(pinned(job.steps)).toBe(true);
+  });
+
+  it('every job sets read-only permissions explicitly', () => {
+    for (const name of ['release-pr-checks.yml', 'release-staging-ota.yml']) {
+      for (const job of Object.values(load(name).jobs) as { permissions?: Record<string, string> }[]) {
+        expect(job.permissions).toEqual({ contents: 'read' });
+      }
+    }
   });
 });

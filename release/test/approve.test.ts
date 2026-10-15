@@ -9,7 +9,8 @@ const MAIN = fileURLToPath(new URL('../../cli/src/main.ts', import.meta.url));
 const SHA = 'a'.repeat(40);
 
 // A clean git checkout plus fake `gh` and `eas` that log every call and print the
-// canned JSON from FAKE_* env vars. `merge`, `submit`, `build`, and `republish` calls
+// canned JSON from FAKE_* env vars (FAKE_GH_MAIN: the base head; FAKE_GH_PARENT: the
+// merge commit's first parent). `merge`, `submit`, `build`, and `republish` calls
 // are the side effects the tests look for.
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), 'rnship-approve-'));
@@ -19,7 +20,14 @@ function sandbox() {
   mkdirSync(bin);
   mkdirSync(work);
   for (const [name, script] of Object.entries({
-    gh: `if [ "$1 $2" = "pr view" ]; then printf '%s' "$FAKE_GH_PR"; fi`,
+    gh: [
+      'case "$1:$2:$5" in',
+      `  pr:view:mergeCommit) printf '%s' "$FAKE_GH_MERGED";;`,
+      `  pr:view:*) printf '%s' "$FAKE_GH_PR";;`,
+      `  api:*/git/ref/heads/*) printf '%s' "$FAKE_GH_MAIN";;`,
+      `  api:*/commits/*) printf '%s' "$FAKE_GH_PARENT";;`,
+      'esac',
+    ].join('\n'),
     eas: `case "$1" in build:view) printf '%s' "$FAKE_EAS_BUILD";; update:view) printf '%s' "$FAKE_EAS_UPDATE";; esac`,
   })) {
     writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n${script}\n`);
@@ -47,32 +55,104 @@ function sandbox() {
     return { code: run.status, stdout: run.stdout, stderr: run.stderr };
   }
   const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []);
-  return { work, head, rnship, calls, git };
+  return { root, work, head, rnship, calls, git };
 }
 
 const asAgent = { RNSHIP_AGENT_USER: userInfo().username };
 
-describe('rnship merge approve', () => {
-  it('merges when the PR head matches the approved SHA, pinned with --match-head-commit', () => {
-    const s = sandbox();
-    const run = s.rnship(['merge', 'approve', SHA, '--pr', '7'], { FAKE_GH_PR: JSON.stringify({ headRefOid: SHA, state: 'OPEN' }) });
+const MAIN_1 = '1'.repeat(40);
+const MAIN_2 = '2'.repeat(40);
+const LEDGER = 'main-heads/passpier_app_main.json';
 
+/** gh fakes for PR 7 at SHA against passpier/app, base `main` at MAIN_1, merging into MAIN_2. */
+const gh = (over: { head?: string; main?: string; parent?: string } = {}) => ({
+  FAKE_GH_PR: JSON.stringify({ headRefOid: over.head ?? SHA, state: 'OPEN', baseRefName: 'main', url: 'https://github.com/passpier/app/pull/7' }),
+  FAKE_GH_MAIN: over.main ?? MAIN_1,
+  FAKE_GH_MERGED: JSON.stringify({ mergeCommit: { oid: MAIN_2 } }),
+  FAKE_GH_PARENT: over.parent ?? MAIN_1,
+});
+
+const merges = (calls: string[]) => calls.filter((c) => c.startsWith('gh pr merge'));
+
+describe('rnship merge approve', () => {
+  it('on first use, merges only with --accept-main at the current base head, then records the merge commit', () => {
+    const s = sandbox();
+    const first = s.rnship(['merge', 'approve', SHA, '--pr', '7'], gh());
+    expect(first.code).toBe(1);
+    expect(first.stderr).toContain(`--accept-main ${MAIN_1}`);
+    expect(merges(s.calls())).toEqual([]);
+
+    const run = s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_1], gh());
     expect(run.code).toBe(0);
     expect(s.calls()).toContain(`gh pr merge 7 --merge --match-head-commit ${SHA}`);
+    expect(JSON.parse(readFileSync(join(s.root, 'state', LEDGER), 'utf8'))).toMatchObject({ repo: 'passpier/app', base: 'main', sha: MAIN_2 });
+  });
+
+  it('merges the next PR without --accept-main when the base is still where the last merge left it', () => {
+    const s = sandbox();
+    expect(s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_1], gh()).code).toBe(0);
+    const next = 'c'.repeat(40);
+    const run = s.rnship(['merge', 'approve', next, '--pr', '8'], gh({ head: next, main: MAIN_2, parent: MAIN_2 }));
+    expect(run.code).toBe(0);
+    expect(merges(s.calls())).toHaveLength(2);
+  });
+
+  it('refuses when the base moved since the last merge approve, naming both SHAs', () => {
+    const s = sandbox();
+    expect(s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_1], gh()).code).toBe(0);
+    const moved = 'd'.repeat(40);
+    const next = 'c'.repeat(40);
+    const run = s.rnship(['merge', 'approve', next, '--pr', '8'], gh({ head: next, main: moved }));
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain(`moved from ${MAIN_2} to ${moved}`);
+    expect(run.stderr).toContain(`compare/${MAIN_2}...${moved}`);
+    expect(merges(s.calls())).toHaveLength(1);
+  });
+
+  it('refuses --accept-main that is not the current base head', () => {
+    const s = sandbox();
+    const run = s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_2], gh());
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain(`isn't the current main head ${MAIN_1}`);
+    expect(merges(s.calls())).toEqual([]);
+  });
+
+  it('ignores a ledger entry that is writable by others or names another user', () => {
+    const s = sandbox();
+    expect(s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_1], gh()).code).toBe(0);
+    const ledger = join(s.root, 'state', LEDGER);
+    const next = 'c'.repeat(40);
+    const env = gh({ head: next, main: MAIN_2, parent: MAIN_2 });
+
+    chmodSync(ledger, 0o666);
+    expect(s.rnship(['merge', 'approve', next, '--pr', '8'], env).stderr).toContain('writable by group or others');
+    chmodSync(ledger, 0o644);
+    const record = JSON.parse(readFileSync(ledger, 'utf8'));
+    writeFileSync(ledger, JSON.stringify({ ...record, recorded_by: { uid: record.recorded_by.uid + 1, user: 'someone' } }));
+    expect(s.rnship(['merge', 'approve', next, '--pr', '8'], env).stderr).toContain("isn't owned by the user it names");
+    expect(merges(s.calls())).toHaveLength(1);
+  });
+
+  it("doesn't record the merge commit when its parent isn't the checked base head", () => {
+    const s = sandbox();
+    const run = s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_1], gh({ parent: 'e'.repeat(40) }));
+    expect(run.code).toBe(0);
+    expect(run.stderr).toContain('was not recorded');
+    expect(existsSync(join(s.root, 'state', LEDGER))).toBe(false);
   });
 
   it('refuses when the PR head moved past the approved SHA', () => {
     const s = sandbox();
-    const run = s.rnship(['merge', 'approve', SHA, '--pr', '7'], { FAKE_GH_PR: JSON.stringify({ headRefOid: 'b'.repeat(40), state: 'OPEN' }) });
+    const run = s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_1], gh({ head: 'b'.repeat(40) }));
 
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('not ' + SHA);
-    expect(s.calls().some((c) => c.startsWith('gh pr merge'))).toBe(false);
+    expect(merges(s.calls())).toEqual([]);
   });
 
   it('refuses to run as the agent user, before calling gh', () => {
     const s = sandbox();
-    const run = s.rnship(['merge', 'approve', SHA, '--pr', '7'], { ...asAgent, FAKE_GH_PR: JSON.stringify({ headRefOid: SHA, state: 'OPEN' }) });
+    const run = s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_1], { ...asAgent, ...gh() });
 
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('agent user');
@@ -81,9 +161,8 @@ describe('rnship merge approve', () => {
 
   it('is single-use', () => {
     const s = sandbox();
-    const env = { FAKE_GH_PR: JSON.stringify({ headRefOid: SHA, state: 'OPEN' }) };
-    expect(s.rnship(['merge', 'approve', SHA, '--pr', '7'], env).code).toBe(0);
-    const again = s.rnship(['merge', 'approve', SHA, '--pr', '7'], env);
+    expect(s.rnship(['merge', 'approve', SHA, '--pr', '7', '--accept-main', MAIN_1], gh()).code).toBe(0);
+    const again = s.rnship(['merge', 'approve', SHA, '--pr', '7'], gh({ main: MAIN_2, parent: MAIN_2 }));
     expect(again.code).toBe(1);
     expect(again.stderr).toContain('single-use');
   });

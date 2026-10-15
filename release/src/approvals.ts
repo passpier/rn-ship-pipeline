@@ -69,13 +69,21 @@ export function findApproval(dir: string, kind: ApprovalKind, digest: string, en
     return { ok: false, reason: `${path} is not valid JSON` };
   }
   if (record.kind !== kind || record.digest !== digest) return { ok: false, reason: `${path} doesn't match ${kind} ${digest}` };
-  const stat = statSync(path);
-  if (stat.uid !== record.approved_by?.uid) return { ok: false, reason: `${path} isn't owned by the user it names` };
-  if (record.approved_by.user === agentUser(env) || stat.uid === uidOf(agentUser(env))) {
-    return { ok: false, reason: `${path} was written by the agent user` };
-  }
-  if ((stat.mode & 0o022) !== 0) return { ok: false, reason: `${path} is writable by group or others` };
+  const untrusted = untrustedReason(path, record.approved_by, env);
+  if (untrusted) return { ok: false, reason: untrusted };
   return { ok: true, record, path };
+}
+
+/**
+ * Why a state file written by a human can't be trusted, or undefined if it can: it must be
+ * owned by the user it names, that user isn't the agent, and nobody else can write it.
+ */
+export function untrustedReason(path: string, by: { uid: number; user: string } | undefined, env: Env = process.env): string | undefined {
+  const stat = statSync(path);
+  if (stat.uid !== by?.uid) return `${path} isn't owned by the user it names`;
+  if (by.user === agentUser(env) || stat.uid === uidOf(agentUser(env))) return `${path} was written by the agent user`;
+  if ((stat.mode & 0o022) !== 0) return `${path} is writable by group or others`;
+  return undefined;
 }
 
 function uidOf(user: string): number | undefined {

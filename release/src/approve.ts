@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { ApprovalError, approvalPath, assertHumanUser, writeApproval, type ApprovalKind } from './approvals.ts';
+import { readMainHead, writeMainHead } from './mainHead.ts';
 
 // `rnship merge approve` and `rnship release approve`: you run these as your own user,
 // with your own gh and eas credentials. Approving *is* executing the action (D1). Each
@@ -32,19 +33,72 @@ export const spawnRunner: Runner = (command, args, opts) => {
   return { code: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
 };
 
-export type ApproveResult = { kind: ApprovalKind; digest: string; subject: string; record: string };
+export type ApproveResult = { kind: ApprovalKind; digest: string; subject: string; record: string; notes?: string[] };
 
-export function mergeApprove(ctx: ApproveContext, input: { sha: string; pr: string; repo?: string }): ApproveResult {
+type PrView = { headRefOid: string; state: string; baseRefName: string; url: string };
+
+export function mergeApprove(
+  ctx: ApproveContext,
+  input: { sha: string; pr: string; repo?: string; acceptMain?: string },
+): ApproveResult {
   const { run, env } = prepare(ctx, 'merge', input.sha);
-  const repo = input.repo ? ['--repo', input.repo] : [];
-  const pr = json<{ headRefOid: string; state: string }>(run('gh', ['pr', 'view', input.pr, '--json', 'headRefOid,state', ...repo], query(ctx)));
+  const repoFlag = input.repo ? ['--repo', input.repo] : [];
+  const pr = json<PrView>(run('gh', ['pr', 'view', input.pr, '--json', 'headRefOid,state,baseRefName,url', ...repoFlag], query(ctx)));
   if (pr.state !== 'OPEN') throw new ApprovalError(`PR ${input.pr} is ${pr.state}, not OPEN`);
   if (pr.headRefOid !== input.sha) {
     throw new ApprovalError(`PR ${input.pr} head is ${pr.headRefOid}, not ${input.sha}; review the new commits and approve that SHA`);
   }
+  const repo = /^https:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\/\d+$/.exec(pr.url)?.[1];
+  if (!repo) throw new ApprovalError(`can't read the repo from PR URL ${pr.url}`);
+  const base = pr.baseRefName;
+
+  // The base must still be where the last merge approve left it (D1 backstop). Anything
+  // else reached main without you: inspect it, then vouch for it with --accept-main.
+  const current = sha(text(run('gh', ['api', `repos/${repo}/git/ref/heads/${base}`, '--jq', '.object.sha'], query(ctx))), `${base} head`);
+  if (input.acceptMain !== undefined) {
+    if (input.acceptMain !== current) throw new ApprovalError(`--accept-main ${input.acceptMain} isn't the current ${base} head ${current}`);
+  } else {
+    const known = readMainHead(ctx.state, repo, base, env);
+    const vouch = `inspect it, then re-run with --accept-main ${current}`;
+    if (!known.ok) throw new ApprovalError(`${known.reason}; ${base} is at ${current}: ${vouch}`);
+    if (known.record.sha !== current) {
+      throw new ApprovalError(
+        `${base} moved from ${known.record.sha} to ${current} since the last rnship merge approve: ` +
+          `https://github.com/${repo}/compare/${known.record.sha}...${current}; ${vouch}`,
+      );
+    }
+  }
+
   // --match-head-commit makes GitHub refuse the merge if the head moved after our check.
-  act(run('gh', ['pr', 'merge', input.pr, '--merge', '--match-head-commit', input.sha, ...repo], live(ctx)), 'gh pr merge');
-  return record(ctx, env, 'merge', input.sha, `PR ${input.pr}`);
+  act(run('gh', ['pr', 'merge', input.pr, '--merge', '--match-head-commit', input.sha, ...repoFlag], live(ctx)), 'gh pr merge');
+  const result = record(ctx, env, 'merge', input.sha, `PR ${input.pr}`);
+  const note = recordMergeCommit(ctx, run, env, { pr: input.pr, repoFlag, repo, base, parent: current });
+  return note ? { ...result, notes: [note] } : result;
+}
+
+/**
+ * After the merge, records its merge commit as the new base head. It records nothing if
+ * the merge commit's first parent isn't the head we checked (something landed on the base
+ * in between), so the next merge approve refuses until you vouch.
+ */
+function recordMergeCommit(
+  ctx: ApproveContext,
+  run: Runner,
+  env: Record<string, string | undefined>,
+  m: { pr: string; repoFlag: string[]; repo: string; base: string; parent: string },
+): string | undefined {
+  const unrecorded = (why: string) =>
+    `merged, but the ${m.base} head was not recorded (${why}); the next merge approve will ask you to inspect ${m.base} and pass --accept-main`;
+  try {
+    const merged = json<{ mergeCommit?: { oid?: string } | null }>(run('gh', ['pr', 'view', m.pr, '--json', 'mergeCommit', ...m.repoFlag], query(ctx)));
+    const oid = sha(merged.mergeCommit?.oid ?? '', 'merge commit');
+    const parent = sha(text(run('gh', ['api', `repos/${m.repo}/commits/${oid}`, '--jq', '.parents[0].sha'], query(ctx))), 'merge parent');
+    if (parent !== m.parent) return unrecorded(`merge commit ${oid} has first parent ${parent}, not the checked head ${m.parent}`);
+    writeMainHead(ctx.state, { repo: m.repo, base: m.base, sha: oid }, env);
+    return undefined;
+  } catch (error) {
+    return unrecorded(error instanceof Error ? error.message : String(error));
+  }
 }
 
 export function releaseApproveBuild(ctx: ApproveContext, input: { sha: string; platform: string; profile?: string }): ApproveResult {
@@ -120,6 +174,11 @@ const live = (ctx: ApproveContext) => ({ cwd: ctx.cwd, capture: false });
 function text(result: RunResult): string {
   if (result.code !== 0) throw new ApprovalError(result.stderr.trim() || `command failed with exit ${result.code}`);
   return result.stdout.trim();
+}
+
+function sha(value: string, what: string): string {
+  if (!/^[0-9a-f]{40}$/.test(value)) throw new ApprovalError(`expected a commit SHA for the ${what}, got: ${value.slice(0, 80) || '(empty)'}`);
+  return value;
 }
 
 function json<T>(result: RunResult): T {

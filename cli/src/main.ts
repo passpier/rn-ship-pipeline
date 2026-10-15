@@ -28,7 +28,9 @@ const USAGE = `usage:
   rnship policy check <project-root> --base-ref <sha> [--policy <project-policy.yaml>] [--baseline <approved-baseline.yaml>]
       exit 1 when any gate fires; deps/config rules compare against the approved baseline
   rnship baseline approve <approved-baseline.yaml> [--project <root>]
-  rnship merge approve <sha> --pr <number> [--repo <owner/name>]
+  rnship merge approve <sha> --pr <number> [--repo <owner/name>] [--accept-main <sha>]
+      refuses if the PR's base moved since the last merge approve; after inspecting, vouch for the
+      current base head with --accept-main (also needed on the first merge in a repo)
   rnship release approve build <sha> --platform <ios|android|all> [--profile production]
   rnship release approve submit <build-id> [--profile production]
   rnship release approve update <group-id> [--rollout 10] [--from-branch staging] [--channel production]
@@ -57,6 +59,7 @@ function approveContext() {
 
 function approved(result: ApproveResult): void {
   console.log(`approved ${result.kind} ${result.digest}: ${result.subject}\n${result.record}`);
+  for (const note of result.notes ?? []) console.error(`rnship: warning: ${note}`);
 }
 
 function required(values: Record<string, unknown>, ...names: string[]): void {
@@ -81,6 +84,7 @@ async function main(argv: string[]): Promise<void> {
       project: { type: 'string' },
       pr: { type: 'string' },
       repo: { type: 'string' },
+      'accept-main': { type: 'string' },
       platform: { type: 'string' },
       profile: { type: 'string' },
       rollout: { type: 'string' },
@@ -130,7 +134,7 @@ async function main(argv: string[]): Promise<void> {
     case 'merge approve': {
       if (!positionals[0]) throw new UsageError('missing <sha>');
       required(values, 'pr');
-      approved(mergeApprove(approveContext(), { sha: positionals[0], pr: values.pr!, repo: values.repo }));
+      approved(mergeApprove(approveContext(), { sha: positionals[0], pr: values.pr!, repo: values.repo, acceptMain: values['accept-main'] }));
       return;
     }
     case 'release approve': {

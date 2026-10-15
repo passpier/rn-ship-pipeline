@@ -3,11 +3,20 @@
 # production credential (D1), so this runs only for a push to main, which happens
 # after `rnship merge approve`. Production is never published from CI: promote with
 # `rnship release approve update <group-id>` on the release Mac.
+#
+# Actor gate (D1 backstop): the broker's GitHub App token can push to main on a Free
+# private repo, and that push triggers `on: push` as `rnship-agent[bot]` (S0 G8). The job
+# runs only when you both pushed and triggered the run, so a bot push, or your re-run of
+# one, is skipped before any step or checkout (S0 G9).
 name: rnship-staging-ota
 
 on:
   workflow_call:
     inputs:
+      release-actor:
+        description: The GitHub login allowed to publish (yours). Pushes and re-runs by anyone else skip the job.
+        type: string
+        required: true
       install-command:
         type: string
         default: npm ci
@@ -31,8 +40,12 @@ permissions:
 
 jobs:
   staging-ota:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.actor == inputs.release-actor && github.triggering_actor == inputs.release-actor
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
