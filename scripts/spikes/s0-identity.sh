@@ -187,12 +187,21 @@ finish() {
 # S0: does identity separation hold? Run as YOUR macOS user (not rnship-agent),
 # from the repo root. Results (pass/fail only, no secrets) go to ENV_FILE;
 # Claude turns them into docs/spikes/S0.md. Plan: §8 S0 and D1.
+#
+# Three stages. The only user switch is one GUI login as rnship-agent (stage 2):
+# you log in and switch straight back. Setup then runs from here, inside that
+# session, via launchctl asuser. To undo everything: scripts/spikes/s0-teardown.sh
 
-ENV_FILE="${ENV_FILE:-docs/spikes/S0.results.env}"
+ENV_FILE=docs/spikes/S0.results.env # unconditional: the library already defaulted it to .env
 AGENT=rnship-agent
 PROBE_REPO=passpier/rnship-s6-probe
+NODE_VERSION=v24.21.0 # eas-cli 24 needs Node >= 20.18.3; /usr/local has 20.4
 SHARED=/Users/Shared/rnship-s0
-TOTAL_STAGES=8
+TOTAL_STAGES=3
+
+GH_BIN=$(command -v gh || true)
+[[ -n "$GH_BIN" ]] || { warn "gh isn't installed for your user; install it first (brew install gh)"; exit 1; }
+gh auth status >/dev/null 2>&1 || { warn "gh isn't logged in for your user; run gh auth login first"; exit 1; }
 
 # record KEY VALUE writes a result line.
 record() { write_env "$1" "$2"; }
@@ -200,10 +209,25 @@ record() { write_env "$1" "$2"; }
 # as_agent_can CMD... runs CMD as rnship-agent; success means the agent CAN do it.
 as_agent_can() { sudo -u "$AGENT" -H "$@" >/dev/null 2>&1; }
 
+# as_agent_tty CMD... runs CMD as rnship-agent inside its logged-in GUI session
+# (so it reaches the agent's keychain), keeping this terminal's TTY. Needs
+# AGENT_UID and a live session. Starts in the agent's home: it can't read yours.
+as_agent_tty() {
+  ( cd / && sudo launchctl asuser "$AGENT_UID" sudo -u "$AGENT" -H \
+    /usr/bin/env PATH="/Users/$AGENT/.local/bin:$(dirname "$GH_BIN"):/usr/bin:/bin:/usr/sbin:/sbin" \
+    /bin/sh -c 'cd ~ && exec "$@"' sh "$@" )
+}
+
+# import_results FILE copies KEY=VALUE lines from an agent-side output file, prefixed S0_.
+import_results() {
+  [[ -f "$1" ]] || { warn "no results at $1"; return; }
+  while IFS='=' read -r k v; do [[ -n "$k" ]] && record "S0_$k" "$v"; done < "$1"
+}
+
 banner "S0 · rnship-agent identity separation"
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
-stage "Create the rnship-agent macOS user"
+stage "Prepare: create the agent user and check isolation"
 if id "$AGENT" >/dev/null 2>&1; then
   say "User $AGENT already exists (uid $(id -u "$AGENT"))."
 else
@@ -217,16 +241,15 @@ else
   fi
 fi
 id "$AGENT" >/dev/null 2>&1 && record S0_USER_EXISTS yes || { record S0_USER_EXISTS no; warn "no $AGENT user; stopping"; exit 1; }
+AGENT_UID=$(id -u "$AGENT")
 if dseditgroup -o checkmember -m "$AGENT" admin >/dev/null 2>&1; then
   record S0_USER_IS_ADMIN yes; warn "$AGENT is an admin: make it Standard in System Settings"
 else
   record S0_USER_IS_ADMIN no
 fi
-pause
 
-# ── 2 ─────────────────────────────────────────────────────────────────────
-stage "Isolation: can the agent read your files?"
-say "Each check runs as $AGENT via sudo. 'no' is the result we want."
+say "Isolation checks run as $AGENT via sudo. 'no' is the result we want."
+_existing S0_HOME_MODE_BEFORE >/dev/null || record S0_HOME_MODE_BEFORE "$(stat -f %Lp "$HOME")"
 check_files() {
   record S0_AGENT_LISTS_HOME "$(as_agent_can ls "$HOME" && echo yes || echo no)"
   for path in .expo .config/gh .config/eas .ssh .claude Library/Keychains; do
@@ -240,97 +263,75 @@ check_files() {
 }
 check_files
 if grep -E '^S0_AGENT_(LISTS|READS)_[A-Z_]+=yes$' "$ENV_FILE" >/dev/null; then
-  warn "The agent can see some of your files. macOS home folders default to 755."
+  warn "The agent can see some of your files. macOS home folders default to 750 (group staff)."
   if confirm "Run chmod 700 \"$HOME\" and re-check?"; then
     chmod 700 "$HOME"
     record S0_HOME_CHMOD_700 applied
     check_files
   fi
 fi
-pause
 
-# ── 3 ─────────────────────────────────────────────────────────────────────
-stage "Isolation: can the agent read your login keychain?"
-say "Tries to read your gh and Claude keychain items as $AGENT. 'no' is the result we want."
 KC="$HOME/Library/Keychains/login.keychain-db"
 record S0_AGENT_READS_KEYCHAIN_GH "$(as_agent_can security find-generic-password -s gh:github.com -w "$KC" && echo yes || echo no)"
 record S0_AGENT_READS_KEYCHAIN_CLAUDE "$(as_agent_can security find-generic-password -s 'Claude Code-credentials' -w "$KC" && echo yes || echo no)"
 record S0_AGENT_HAS_EXPO_SESSION "$(as_agent_can test -e "/Users/$AGENT/.expo/state.json" && echo yes || echo no)"
-pause
 
-# ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Log Claude Code in as rnship-agent"
-say "This needs the agent's own GUI session, so Claude's OAuth token lands in its keychain."
-step "Apple menu → Lock Screen (or the user switcher) → log in as $AGENT."
-step "In the agent's Terminal: curl -fsSL https://claude.ai/install.sh | bash"
-step "Run: claude   then /login with the SAME Pro account, then /exit."
-step "Run: claude -p 'reply with: ok' --max-turns 1"
-step "Run: claude -p 'reply with: ok' --max-turns 1 --model claude-opus-5-5"
-step "Run: which claude   (note the path)"
-step "Switch back to your own user, leaving $AGENT logged in (needed for stage 5)."
-pause "Press Enter when you're back"
-ask S0_AGENT_CLAUDE_PATH "Path printed by 'which claude' as the agent:"
-record S0_AGENT_CLAUDE_PATH "$S0_AGENT_CLAUDE_PATH"
-ask S0_CLAUDE_P_OK "Did the first claude -p print ok? (yes/no):"
-record S0_CLAUDE_P_OK "$S0_CLAUDE_P_OK"
-ask S0_OPUS_ON_PRO "Did the Opus run work? (yes / no + error text):"
-record S0_OPUS_ON_PRO "$S0_OPUS_ON_PRO"
-
-# ── 5 ─────────────────────────────────────────────────────────────────────
-stage "LaunchAgent: does claude -p authenticate under launchd?"
-AGENT_UID=$(id -u "$AGENT")
-PLIST="/Users/$AGENT/Library/LaunchAgents/dev.rnship.s0probe.plist"
-LOG="/Users/$AGENT/rnship-s0-probe.log"
-say "Installs a one-shot LaunchAgent in $AGENT's GUI session that runs claude -p once."
-if confirm "Install and run it now?"; then
-  sudo -u "$AGENT" mkdir -p "/Users/$AGENT/Library/LaunchAgents"
-  sudo -u "$AGENT" tee "$PLIST" >/dev/null <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>dev.rnship.s0probe</string>
-  <key>ProgramArguments</key><array>
-    <string>$S0_AGENT_CLAUDE_PATH</string><string>-p</string><string>reply with: ok</string>
-    <string>--max-turns</string><string>1</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>$LOG</string>
-  <key>StandardErrorPath</key><string>$LOG</string>
-</dict></plist>
-PLIST
-  sudo rm -f "$LOG"
-  if sudo launchctl bootstrap "gui/$AGENT_UID" "$PLIST"; then
-    note "waiting up to 90s for the run…"
-    for _ in $(seq 1 18); do sudo test -s "$LOG" && break; sleep 5; done
-    say "Log:"; { sudo cat "$LOG" 2>/dev/null || true; } | sed 's/^/    /' | head -20 || true
-    ask S0_LAUNCHAGENT_OK "Does the log show a successful reply (not a login error)? (yes/no):"
-  else
-    warn "bootstrap failed: is $AGENT still logged in (fast user switching)?"
-    S0_LAUNCHAGENT_OK=no
-  fi
-  sudo launchctl bootout "gui/$AGENT_UID/dev.rnship.s0probe" 2>/dev/null || true
-  sudo rm -f "$PLIST"
-  record S0_LAUNCHAGENT_OK "$S0_LAUNCHAGENT_OK"
-else
-  record S0_LAUNCHAGENT_OK skipped
-fi
-
-# ── 6 ─────────────────────────────────────────────────────────────────────
-stage "GitHub machine account and token (inside the agent's session)"
-say "The token is created and stored ONLY in $AGENT's session. This wizard never sees it."
-step "Log in as $AGENT again and open a browser there."
-step "Sign up at https://github.com/signup with a separate email (a +alias works), e.g. passpier-rnship-bot."
-step "Classic token: https://github.com/settings/tokens/new?scopes=repo&description=rnship-agent"
-step "  Scope: repo ONLY. Leave 'workflow' unchecked. Fine-grained PATs can't reach another user's personal repos."
-step "In the agent's Terminal: brew install gh (or download it), then gh auth login → GitHub.com → HTTPS → paste the token."
-step "Then: gh auth setup-git"
-step "Switch back to your own user."
-pause "Press Enter when you're back"
-ask S0_BOT_LOGIN "Machine account username:"
-record S0_BOT_LOGIN "$S0_BOT_LOGIN"
-
-# The probe scripts run as the agent (they need its gh token) and write results to $SHARED.
+# Agent-side scripts. Owned by you in a sticky 1777 dir, so the agent can run
+# them but not change them. They write results back into $SHARED.
 sudo mkdir -p "$SHARED" && sudo chmod 1777 "$SHARED"
+
+{ echo '#!/usr/bin/env bash'; printf 'GH=%q\n' "$GH_BIN"; cat <<'EOS'
+# Fallback for when s0-identity.sh can't reach this user's keychain via launchctl asuser.
+# Run as rnship-agent, in its own Terminal. Results go to /Users/Shared/rnship-s0/agent.out.
+set -u
+[[ "$(id -un)" == rnship-agent ]] || { echo "Run this as rnship-agent, not $(id -un)."; exit 1; }
+OUT=/Users/Shared/rnship-s0/agent.out; : > "$OUT"
+rec() { echo "$1=$2" | tee -a "$OUT"; }
+hr() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+
+hr "1/2 · Claude Code"
+export PATH="$HOME/.local/bin:$PATH"
+command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
+CLAUDE=$(command -v claude) || { echo "claude not found after install"; exit 1; }
+rec AGENT_CLAUDE_PATH "$CLAUDE"
+echo "Claude Code opens next: type /login, sign in with the SAME Pro account, then /exit."
+read -rp "Press Enter to open Claude Code… " _
+"$CLAUDE" || true
+probe() { # probe KEY [extra claude args...]
+  local key=$1 out; shift
+  echo "running claude -p $*…"
+  out=$("$CLAUDE" -p 'reply with: ok' --max-turns 1 "$@" 2>&1)
+  if grep -qiw ok <<<"$out"; then rec "$key" yes
+  else rec "$key" "no: $(head -n1 <<<"$out" | tr -d '\r' | cut -c1-200)"; fi
+}
+probe CLAUDE_P_OK
+probe OPUS_ON_PRO --model claude-opus-5-5
+
+hr "2/2 · GitHub machine account"
+[[ -x "$GH" ]] || { echo "gh not found at $GH"; exit 1; }
+if "$GH" auth status >/dev/null 2>&1; then
+  echo "gh is already logged in for this user: $("$GH" api user --jq .login)"
+else
+  echo "1. In the browser that opens, sign up for a SEPARATE GitHub account"
+  echo "   (a +alias email works), e.g. passpier-rnship-bot. If it exists, just sign in as it."
+  open https://github.com/signup
+  read -rp "Press Enter once you're signed in as the machine account… " _
+  echo "2. Create a classic token. Scope: repo ONLY. Leave 'workflow' unchecked."
+  echo "   (Fine-grained tokens can't reach another user's personal repos.)"
+  open "https://github.com/settings/tokens/new?scopes=repo&description=rnship-agent"
+  read -rsp "Paste the token (hidden), then Enter: " TOKEN; echo
+  printf '%s' "$TOKEN" | "$GH" auth login --hostname github.com --with-token || { unset TOKEN; echo "gh auth login failed"; exit 1; }
+  unset TOKEN
+fi
+"$GH" auth setup-git
+rec GH_PATH "$GH"
+rec BOT_LOGIN "$("$GH" api user --jq .login)"
+rec TOKEN_SCOPES "$("$GH" api -i user 2>/dev/null | tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: *//p' | tr -d ' ')"
+rec SETUP_DONE yes
+printf '\n\033[1;32mDone.\033[0m Switch back to your own user. Leave this one logged in.\n'
+EOS
+} > "$SHARED/agent-setup.sh"
+
 cat > "$SHARED/probe-common.sh" <<'EOS'
 set -u
 REPO=passpier/rnship-s6-probe
@@ -338,6 +339,10 @@ rec() { echo "$1=$2" | tee -a "$OUT"; }
 try() { local key=$1; shift; if "$@" >/dev/null 2>&1; then rec "$key" yes; else rec "$key" no; fi; }
 gh auth status >/dev/null 2>&1 || { echo "gh isn't logged in for this user"; exit 1; }
 ME=$(gh api user --jq .login)
+# Accept any pending invite to the probe repo (the classic repo scope covers this).
+for id in $(gh api user/repository_invitations --jq ".[] | select(.repository.full_name==\"$REPO\") | .id" 2>/dev/null); do
+  gh api -X PATCH "user/repository_invitations/$id" >/dev/null 2>&1 && echo "accepted invite $id"
+done
 W=$(mktemp -d) && cd "$W" && gh repo clone "$REPO" repo >/dev/null 2>&1 && cd repo || { echo "clone failed"; exit 1; }
 git config user.email "$ME@users.noreply.github.com"; git config user.name "$ME"
 B=probe-$(date +%s)
@@ -370,38 +375,285 @@ try READ_MERGE_PR gh pr merge "$PR" --merge
 git switch -q main && echo "$B" >> direct.txt && git add . && git commit -qm "direct $B"
 try READ_PUSH_MAIN git push -q origin main
 EOS
-chmod 755 "$SHARED"/probe-*.sh
-
-import_results() { # import_results FILE
-  [[ -f "$1" ]] || { warn "no results at $1"; return; }
-  while IFS='=' read -r k v; do [[ -n "$k" ]] && record "S0_$k" "$v"; done < "$1"
+cat > "$SHARED/probe-eas.sh" <<'EOS'
+#!/usr/bin/env bash
+# Acceptance (a): with no Expo session or EXPO_TOKEN, eas submit and eas update to
+# production must fail for lack of credentials. app.json names the real fixture project.
+set -u
+OUT=/Users/Shared/rnship-s0/eas.out; : > "$OUT"
+rec() { echo "$1=$2" | tee -a "$OUT"; }
+export PATH="$HOME/.local/node/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+unset EXPO_TOKEN
+W=$(mktemp -d) && cd "$W" || exit 1
+cp /Users/Shared/rnship-s0/eas-probe/app.json . || { rec AGENT_EAS_SETUP "no app.json"; exit 1; }
+echo '{"submit":{"production":{}}}' > eas.json
+EAS=(npx -y eas-cli@24.13.0)
+probe() { # probe KEY ARGS...: fails-no-auth is the result we want.
+  local key=$1 out; shift
+  if out=$("${EAS[@]}" "$@" --non-interactive 2>&1); then rec "$key" succeeded
+  elif grep -qiE 'log ?in|logged in|EXPO_TOKEN|account is required' <<<"$out"; then rec "$key" fails-no-auth
+  else rec "$key" "fails-other: $(grep -v '^[[:space:]]*$' <<<"$out" | tail -n1 | tr -d '\r' | cut -c1-200)"; fi
+  tail -n 5 <<<"$out"
 }
-
-# ── 7 ─────────────────────────────────────────────────────────────────────
-stage "Probe A: machine account with Write access"
-say "Adds $S0_BOT_LOGIN to $PROBE_REPO with Write, then you run the probe as the agent."
-if confirm "Invite $S0_BOT_LOGIN with Write on $PROBE_REPO?"; then
-  gh api -X PUT "repos/$PROBE_REPO/collaborators/$S0_BOT_LOGIN" -f permission=push >/dev/null && say "invited"
-fi
-step "As $AGENT: accept the invite at https://github.com/$PROBE_REPO/invitations (or gh api user/repository_invitations)."
-step "As $AGENT, in Terminal: $SHARED/probe-write.sh"
-step "Switch back here."
-pause "Press Enter when the probe has finished"
-import_results "$SHARED/write.out"
-note "Expected under D1: MERGE_PR=no, PUSH_MAIN=no, PUSH_WORKFLOW=no, SEES_PIPELINE=no."
+rec AGENT_NODE "$(node -v 2>&1)"
+probe AGENT_EAS_SUBMIT submit --platform ios --profile production
+probe AGENT_EAS_UPDATE_PROD update --channel production --message probe
+EOS
+chmod 755 "$SHARED"/agent-setup.sh "$SHARED"/probe-*.sh
+say "Agent-side scripts are ready in $SHARED."
 pause
 
-# ── 8 ─────────────────────────────────────────────────────────────────────
-stage "Probe B: machine account with Read access + fork"
-if confirm "Downgrade $S0_BOT_LOGIN to Read on $PROBE_REPO?"; then
-  gh api -X PUT "repos/$PROBE_REPO/collaborators/$S0_BOT_LOGIN" -f permission=pull >/dev/null && say "downgraded to Read"
+# ── 2 ─────────────────────────────────────────────────────────────────────
+stage "One login as $AGENT, then straight back here"
+AGENT_HOME="/Users/$AGENT"
+CLAUDE_PATH="$AGENT_HOME/.local/bin/claude"
+
+# Claude Code installs without a session.
+if sudo test -x "$CLAUDE_PATH"; then
+  say "Claude Code is already installed for $AGENT."
+else
+  say "Installing Claude Code for $AGENT (no login yet)…"
+  ( cd / && sudo -u "$AGENT" -H bash -c 'cd ~ && curl -fsSL https://claude.ai/install.sh | bash' ) \
+    || { warn "Claude Code install failed"; exit 1; }
+  sudo test -x "$CLAUDE_PATH" || { warn "claude isn't at $CLAUDE_PATH after install"; exit 1; }
 fi
-step "As $AGENT, in Terminal: $SHARED/probe-read.sh"
-step "Switch back here."
-pause "Press Enter when the probe has finished"
+record S0_AGENT_CLAUDE_PATH "$CLAUDE_PATH"
+
+# The one switch: a real GUI login creates and unlocks the agent's login keychain.
+session_up() {
+  sudo launchctl print "gui/$AGENT_UID" >/dev/null 2>&1 \
+    && sudo test -e "$AGENT_HOME/Library/Keychains/login.keychain-db"
+}
+if session_up; then
+  say "$AGENT is logged in (GUI session found)."
+else
+  say "$AGENT needs one real login. Nothing to do on its desktop:"
+  step "Apple menu → Lock Screen (or the user switcher) → log in as $AGENT."
+  note "  The first login shows Setup Assistant: skip Apple ID and the rest."
+  step "As soon as its desktop appears, switch straight back to your user."
+  note "  Leave $AGENT logged in: the probes, and later the pipeline, run in its session."
+  pause "Press Enter when you're back"
+  until session_up; do
+    warn "No GUI session for $AGENT yet (or no login keychain)."
+    confirm "Check again?" || { warn "stopping; re-run this wizard to resume"; exit 1; }
+  done
+  say "Session found."
+fi
+
+# asuser_keychain_ok: can we write and read the agent's keychain from here?
+asuser_keychain_ok() {
+  local got=""
+  as_agent_tty security add-generic-password -U -s rnship-s0-asuser -a probe -w ok </dev/null >/dev/null 2>&1 || return 1
+  got=$(as_agent_tty security find-generic-password -s rnship-s0-asuser -w </dev/null 2>/dev/null) || got=""
+  as_agent_tty security delete-generic-password -s rnship-s0-asuser </dev/null >/dev/null 2>&1 || true
+  [[ "$got" == ok ]]
+}
+
+# agent_claude_probe KEY [extra claude args...]
+agent_claude_probe() {
+  local key=$1 out; shift
+  note "running claude -p $* as $AGENT…"
+  out=$(as_agent_tty "$CLAUDE_PATH" -p 'reply with: ok' --max-turns 1 "$@" </dev/null 2>&1) || true
+  if grep -qiw ok <<<"$out"; then record "$key" yes
+  else record "$key" "no: $(head -n1 <<<"$out" | tr -d '\r' | cut -c1-200)"; fi
+}
+
+setup_via_asuser() {
+  local token=""
+  say "Claude Code opens next, as $AGENT inside its session."
+  step "Type /login and choose the Claude subscription option."
+  step "It prints a URL: open it in YOUR browser (already on the same Pro account) and approve."
+  note "  If it asks for a code, paste it back here. When it says you're logged in, type /exit."
+  pause "Press Enter to open Claude Code"
+  # Ctrl-C in Claude would otherwise kill this wizard too. A trap handler, unlike
+  # an ignored signal, resets in children, so Claude still gets Ctrl-C.
+  trap : INT
+  as_agent_tty "$CLAUDE_PATH" || true
+  trap - INT
+  agent_claude_probe S0_CLAUDE_P_OK
+  agent_claude_probe S0_OPUS_ON_PRO --model claude-opus-5-5
+
+  if as_agent_tty "$GH_BIN" auth status </dev/null >/dev/null 2>&1; then
+    say "gh is already logged in for $AGENT."
+  else
+    say "Now the GitHub machine account. Use a PRIVATE window in your own browser,"
+    say "so your own GitHub login stays out of it."
+    step "Sign up for a SEPARATE account (a +alias email works), e.g. passpier-rnship-bot."
+    note "  If it exists, just sign in as it:  https://github.com/signup"
+    step "In that same window, create a classic token. Scope: repo ONLY, leave 'workflow' unchecked:"
+    note "  https://github.com/settings/tokens/new?scopes=repo&description=rnship-agent"
+    note "  (Fine-grained tokens can't reach another user's personal repos.)"
+    note "  The token is piped straight into $AGENT's keychain; nothing is written to disk."
+    printf '  %sPaste the token (hidden), then Enter:%s ' "$BOLD" "$RESET"
+    read -rs token || true; printf '\n'
+    [[ -n "$token" ]] || { warn "no token entered; re-run this wizard to resume"; exit 1; }
+    printf '%s' "$token" | as_agent_tty "$GH_BIN" auth login --hostname github.com --with-token \
+      || { token=""; warn "gh auth login failed; re-run this wizard to resume"; exit 1; }
+    token=""
+  fi
+  as_agent_tty "$GH_BIN" auth setup-git </dev/null >/dev/null 2>&1 || warn "gh auth setup-git failed for $AGENT"
+  record S0_GH_PATH "$GH_BIN"
+  record S0_BOT_LOGIN "$(as_agent_tty "$GH_BIN" api user --jq .login </dev/null 2>/dev/null)"
+  record S0_TOKEN_SCOPES "$(as_agent_tty "$GH_BIN" api -i user </dev/null 2>/dev/null | tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: *//p' | tr -d ' ')"
+}
+
+# Fallback: the old visit, running agent-setup.sh in the agent's own Terminal.
+setup_in_session() {
+  setup_done() { grep -q '^SETUP_DONE=yes$' "$SHARED/agent.out" 2>/dev/null; }
+  sudo rm -f "$SHARED/agent.out"
+  step "Switch to $AGENT (Apple menu → Lock Screen, or the user switcher)."
+  step "Open Terminal and run:  $SHARED/agent-setup.sh"
+  note "  It checks Claude Code (/login with the SAME Pro account), claude -p and Opus,"
+  note "  then walks you through the GitHub machine account and its classic token."
+  step "When it prints 'Done', switch back here. Leave $AGENT logged in."
+  pause "Press Enter when you're back"
+  until setup_done; do
+    warn "No SETUP_DONE in $SHARED/agent.out yet: agent-setup.sh didn't finish."
+    confirm "Check again?" || { warn "stopping; re-run this wizard to resume"; exit 1; }
+  done
+  import_results "$SHARED/agent.out"
+}
+
+if [[ "$(_existing S0_CLAUDE_P_OK || true)" == yes && -n "$(_existing S0_BOT_LOGIN || true)" ]] \
+  && ! confirm "Agent setup already done (bot: $(_existing S0_BOT_LOGIN)). Redo it?"; then
+  say "Keeping the earlier agent setup."
+else
+  sudo -v
+  if asuser_keychain_ok; then
+    record S0_ASUSER_KEYCHAIN_OK yes
+    record S0_SETUP_VIA asuser
+    setup_via_asuser
+  else
+    record S0_ASUSER_KEYCHAIN_OK no
+    record S0_SETUP_VIA in-session
+    warn "Couldn't reach $AGENT's keychain from here. Falling back to one visit in its Terminal."
+    setup_in_session
+  fi
+fi
+CLAUDE_PATH=$(_existing S0_AGENT_CLAUDE_PATH || true)
+GH_PATH=$(_existing S0_GH_PATH || true)
+BOT=$(_existing S0_BOT_LOGIN || true)
+[[ -n "$CLAUDE_PATH" && -n "$GH_PATH" && -n "$BOT" ]] || { warn "the results are missing the claude path, gh path or bot login; re-run stage 2"; exit 1; }
+[[ ",$(_existing S0_TOKEN_SCOPES || true)," == *,workflow,* ]] && warn "The bot token has the workflow scope. Recreate it with repo only."
+pause
+
+# ── 3 ─────────────────────────────────────────────────────────────────────
+stage "Probes from your session (no switching)"
+
+# run_in_agent_session LABEL TIMEOUT CMD... runs CMD once as a LaunchAgent in the
+# agent's GUI session, so it can use the agent's keychain (Claude OAuth, gh token).
+# Output goes to $SHARED/LABEL.log; succeeds if CMD finished within TIMEOUT seconds.
+run_in_agent_session() {
+  local label=$1 timeout=$2; shift 2
+  local job="dev.rnship.s0.$label"
+  local plist="/Users/$AGENT/Library/LaunchAgents/$job.plist"
+  local log="$SHARED/$label.log" done="$SHARED/$label.done" arg args="" waited=0
+  for arg in "$@"; do args+="<string>$arg</string>"; done
+  sudo rm -f "$log" "$done"
+  sudo launchctl bootout "gui/$AGENT_UID/$job" 2>/dev/null || true
+  sudo -u "$AGENT" mkdir -p "/Users/$AGENT/Library/LaunchAgents"
+  sudo -u "$AGENT" tee "$plist" >/dev/null <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$job</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/sh</string><string>-c</string><string>"\$@"; touch $done</string><string>sh</string>$args
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$(dirname "$CLAUDE_PATH"):$(dirname "$GH_PATH"):/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$log</string>
+  <key>StandardErrorPath</key><string>$log</string>
+</dict></plist>
+PLIST
+  if sudo launchctl bootstrap "gui/$AGENT_UID" "$plist"; then
+    note "waiting up to ${timeout}s for $label…"
+    while [[ ! -e "$done" ]] && (( waited < timeout )); do sleep 5; waited=$((waited + 5)); done
+  else
+    warn "bootstrap failed: is $AGENT still logged in (fast user switching)?"
+  fi
+  sudo launchctl bootout "gui/$AGENT_UID/$job" 2>/dev/null || true
+  sudo rm -f "$plist"
+  [[ -e "$done" ]]
+}
+
+# run_probe LABEL SCRIPT runs a probe under launchd, then via asuser, then by hand.
+run_probe() {
+  local key; key="S0_PROBE_$(echo "$1" | tr 'a-z' 'A-Z')_VIA" # bash 3.2: no ${1^^}
+  if run_in_agent_session "$1" 300 "$2"; then
+    record "$key" launchd
+  elif warn "launchd didn't finish it; trying launchctl asuser…" && sudo rm -f "$SHARED/$1.log" \
+    && as_agent_tty "$2" </dev/null >"$SHARED/$1.log" 2>&1; then
+    record "$key" asuser
+  else
+    record "$key" manual
+    warn "Couldn't run it from here. Fallback (one extra switch):"
+    step "As $AGENT, in Terminal: $2"
+    pause "Press Enter when the probe has finished"
+  fi
+  { sed 's/^/    /' "$SHARED/$1.log" 2>/dev/null || true; } | tail -n 15
+}
+
+say "Runs four jobs inside $AGENT's session via launchd: claude -p, the machine"
+say "account on $PROBE_REPO (Write, then Read), and eas with no Expo credentials."
+confirm "Go ahead?" || { warn "stopping; re-run this wizard to resume"; exit 1; }
+
+say "1/4 · claude -p under launchd"
+if run_in_agent_session claude 120 "$CLAUDE_PATH" -p "reply with: ok" --max-turns 1; then
+  { sed 's/^/    /' "$SHARED/claude.log" || true; } | head -n 10
+  grep -qiw ok "$SHARED/claude.log" && record S0_LAUNCHAGENT_OK yes || record S0_LAUNCHAGENT_OK no
+else
+  record S0_LAUNCHAGENT_OK "no: bootstrap failed or timed out"
+fi
+
+say "2/4 · machine account with Write"
+gh api -X PUT "repos/$PROBE_REPO/collaborators/$BOT" -f permission=push >/dev/null && note "invited $BOT with Write"
+run_probe write "$SHARED/probe-write.sh"
+import_results "$SHARED/write.out"
+record S0_WRITE_EFFECTIVE_PERMISSION "$(gh api "repos/$PROBE_REPO/collaborators/$BOT/permission" --jq .permission 2>/dev/null || echo unknown)"
+note "Expected under D1: MERGE_PR=no, PUSH_MAIN=no, PUSH_WORKFLOW=no, SEES_PIPELINE=no."
+
+say "3/4 · machine account with Read + fork"
+gh api -X PUT "repos/$PROBE_REPO/collaborators/$BOT" -f permission=pull >/dev/null && note "asked GitHub for Read"
+record S0_READ_EFFECTIVE_PERMISSION "$(gh api "repos/$PROBE_REPO/collaborators/$BOT/permission" --jq .permission 2>/dev/null || echo unknown)"
+note "GitHub reports $BOT's permission as: $(_existing S0_READ_EFFECTIVE_PERMISSION || true)"
+run_probe read "$SHARED/probe-read.sh"
 import_results "$SHARED/read.out"
 note "Wanted: PUSH_UPSTREAM=no, FORK=yes, PUSH_FORK=yes, OPEN_PR=yes, MERGE_PR=no, PUSH_MAIN=no."
+
+say "4/4 · eas as $AGENT, with no Expo credentials"
+AGENT_NODE="/Users/$AGENT/.local/node/bin/node"
+if sudo test -x "$AGENT_NODE"; then
+  note "Node is already installed for $AGENT."
+else
+  note "Installing Node $NODE_VERSION for $AGENT (checksum-verified, into its ~/.local/node)…"
+  ( cd / && sudo -u "$AGENT" -H /bin/bash -c '
+      set -euo pipefail
+      v=$1 arch=$(uname -m); [[ $arch == x86_64 ]] && arch=x64
+      f="node-$v-darwin-$arch.tar.gz" t=$(mktemp -d)
+      cd "$t"
+      curl -fsSLO "https://nodejs.org/dist/$v/$f"
+      curl -fsSL "https://nodejs.org/dist/$v/SHASUMS256.txt" | grep " $f\$" | shasum -a 256 -c - >/dev/null
+      mkdir -p ~/.local/node && tar -xzf "$f" -C ~/.local/node --strip-components 1
+      rm -rf "$t"' bash "$NODE_VERSION" ) || warn "Node install for $AGENT failed"
+fi
+FIXTURE_OWNER=$(_existing S0_FIXTURE_OWNER || true)
+FIXTURE_SLUG=$(_existing S0_FIXTURE_SLUG || true)
+FIXTURE_PROJECT_ID=$(_existing S0_FIXTURE_PROJECT_ID || true)
+if [[ -z "$FIXTURE_OWNER" || -z "$FIXTURE_SLUG" || -z "$FIXTURE_PROJECT_ID" ]]; then
+  warn "No fixture project in $ENV_FILE (S0_FIXTURE_OWNER/SLUG/PROJECT_ID): skipping the eas probes."
+elif sudo test -x "$AGENT_NODE"; then
+  sudo mkdir -p "$SHARED/eas-probe"
+  printf '{"expo":{"name":"probe","slug":"%s","owner":"%s","extra":{"eas":{"projectId":"%s"}}}}\n' \
+    "$FIXTURE_SLUG" "$FIXTURE_OWNER" "$FIXTURE_PROJECT_ID" | sudo tee "$SHARED/eas-probe/app.json" >/dev/null
+  run_probe eas "$SHARED/probe-eas.sh"
+  import_results "$SHARED/eas.out"
+  note "Wanted: AGENT_EAS_SUBMIT=fails-no-auth, AGENT_EAS_UPDATE_PROD=fails-no-auth."
+fi
 pause
 
 finish
 say "Next: tell Claude 'S0 done'. It reads $ENV_FILE and writes docs/spikes/S0.md."
+say "To undo everything (GitHub access, the $AGENT user, temp files): scripts/spikes/s0-teardown.sh"
