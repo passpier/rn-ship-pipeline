@@ -38,9 +38,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: passpier/rn-ship-pipeline/.github/workflows/release-staging-ota.yml@<40-char SHA>
     with:
-      release-actor: <your GitHub login>
-      sentry-org: <org>
-      sentry-project: <project>
+      release-actor: "<your GitHub login>"
+      sentry-org: "<org slug>"
+      sentry-project: "<project slug, not the numeric ID>"
     secrets:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}

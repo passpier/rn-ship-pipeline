@@ -367,6 +367,10 @@ note "The org slug is the subdomain in the URL: https://<org>.sentry.io/…"
 ask SENTRY_ORG "Org slug:"
 ask SENTRY_PROJECT "Project slug [rnship-fixture]:"
 SENTRY_PROJECT=${SENTRY_PROJECT:-rnship-fixture}
+# Slugs are lowercase words. An all-digit value is the project ID, which Sentry rejects.
+[[ "$SENTRY_ORG" =~ ^[a-z0-9_-]+$ ]] || fail "\"$SENTRY_ORG\" isn't an org slug"
+[[ "$SENTRY_PROJECT" =~ ^[a-z0-9_-]+$ && ! "$SENTRY_PROJECT" =~ ^[0-9]+$ ]] \
+  || fail "\"$SENTRY_PROJECT\" isn't a project slug (all digits is the project ID): take it from https://$SENTRY_ORG.sentry.io/settings/projects/<slug>/"
 record SENTRY_ORG "$SENTRY_ORG"
 record SENTRY_PROJECT "$SENTRY_PROJECT"
 if has_secret SENTRY_AUTH_TOKEN && ! confirm "$REPO already has SENTRY_AUTH_TOKEN. Replace it?"; then
@@ -430,9 +434,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: $PIPELINE/.github/workflows/release-staging-ota.yml@$RNSHIP_SHA
     with:
-      release-actor: $RELEASE_ACTOR
-      sentry-org: $SENTRY_ORG
-      sentry-project: $SENTRY_PROJECT
+      release-actor: "$RELEASE_ACTOR"
+      sentry-org: "$SENTRY_ORG"
+      sentry-project: "$SENTRY_PROJECT"
     secrets:
       EXPO_TOKEN: \${{ secrets.EXPO_TOKEN }}
       SENTRY_AUTH_TOKEN: \${{ secrets.SENTRY_AUTH_TOKEN }}
