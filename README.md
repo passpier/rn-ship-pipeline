@@ -65,7 +65,7 @@ The output is `{ ios, android, reasons[], gates[], base_build_id, fingerprints }
 Recommended runtime policy: `runtimeVersion: { policy: "fingerprint" }`.
 
 ## Orchestrator (`rnship tick`)
-The orchestrator owns all state in one SQLite file (`$RNSHIP_DB`, default `~/.rnship/orchestrator.db`, owned by `rnship-agent`). Executors are stateless adapters behind one interface: `fake` for simulations, `claude-p` (one fresh `claude -p` session per task), and `ralphex` (pinned v1.7.0; see `docs/spikes/S8.md`). Both live adapters are tested against a stub claude. Live runs on Pro are M3's acceptance.
+The orchestrator owns all state in one SQLite file (`$RNSHIP_DB`, default `~/.rnship/orchestrator.db`, owned by `rnship-agent`). Executors are stateless adapters behind one interface: `fake` for simulations, `claude-p` (one fresh `claude -p` session per task), and `ralphex` (pinned v1.7.0; see `docs/spikes/S8.md`). Both live adapters are tested against a stub claude. Live runs on Pro are M3's acceptance: `scripts/acceptance/m3.sh` runs both as `rnship-agent` on the fixture app.
 
 **ralphex is one adapter, not a dependency.** The Ralph loop (a fresh Claude session per task, repeated until validation passes) is the pattern. ralphex is the first runner wired to it, because S8 verified its internals. The orchestrator core (tick, states, ledger, retries, validation, diff check) never calls it. Everything specific to ralphex lives in `orchestrator/src/executors/` (`ralphex.ts`, `ralphexPlan.ts`). `claude-p` (`claudeP.ts`) runs the loop with no runner in between. Another runner, such as ralph-orchestrator, can sit behind the same `Executor` interface if it:
 - runs headless and exits per batch, instead of sleeping on quota itself;

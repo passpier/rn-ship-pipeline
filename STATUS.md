@@ -21,14 +21,14 @@ Last updated: 2026-10-16. This file is the source of truth for scope, progress a
 - **M1:** guard plugin, executor settings, `rnship policy check`, approve commands, validation sandbox, release workflow templates, actor gate, job permissions. Acceptance (a) is met by S0 N4/E1/E2. Acceptance (e) passed on the fixture repo: staging OTA, Sentry source-map upload, actor gate (`docs/spikes/M1e.md`).
 - **Spikes:** S0 identity + GitHub broker, S1 Pro billing, S2 hooks under `-p`, S6 GitHub/EAS budgets, S8 ralphex internals (pinned v1.7.0; it doesn't run validation commands or parse reset times). Findings in `docs/spikes/`.
 - **M2:** orchestrator state machine (SQLite), tick, ledger, signal + stage dedup, task approvals, `rnship tick|tasks|task approve`; fake executor and ralphex adapter (shim with init check, run against a stub claude on the pinned v1.7.0 binary). Acceptance simulations pass. Ships as v0.2 together with M3.
-- **M3 (code):** `claude-p` adapter (one session per task) against stub claude; the shim also fails closed when a session runs another model than the pinned one; `--plugin-dir` for knowledge plugins. The ralphex refactor was re-checked on the v1.7.0 binary.
+- **M3 (code):** `claude-p` adapter (one session per task) against stub claude; the shim also fails closed when a session runs another model than the pinned one; `--plugin-dir` for knowledge plugins. The ralphex refactor was re-checked on the v1.7.0 binary. The ledger logs usage and model per task (per batch for multi-task ralphex batches); `rnship ledger`. Acceptance wizard `scripts/acceptance/m3.sh`.
 - **rn-game plugin:** `rn-2d-game` skill.
 
 ## Next
 
 1. **Ship v0.1** (M0 + M1): tag it.
 2. **S4** quota error shape (five-hour window). Until then, unrecognized limits park until a probe; its captures become the ralphex adapter's `extraLimitPatterns`.
-3. **M3** live runs of the `claude-p` and ralphex adapters on Pro, as `rnship-agent` (acceptance wizard still to write; the first live run also confirms the `init.model` string the shim compares) → ships **v0.2** with M2. First real app dev happens here.
+3. **M3** live runs of the `claude-p` and ralphex adapters on Pro, as `rnship-agent`: run `scripts/acceptance/m3.sh` (yours; findings go to `docs/spikes/M3.md`). The first live run also confirms the `init.model` string the shim compares → ships **v0.2** with M2. First real app dev happens here. Known gap the run will show: an allowlisted dependency lands in package.json without a lockfile update, because the executor may not install (fix by M5).
 4. **S5** fingerprint runtime policy + **S9** Sentry source maps for EAS Update + **S10** EAS `require-approval` (optional).
 5. **M4** Flow B on Sentry (poll, triage, fix, OTA, rollout, rollback). **S7** Crashlytics later (M4b).
 6. **M5** Flow A change-intake (change request, impact gate, baseline delta, design, `rnship change approve`, tasks).
