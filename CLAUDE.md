@@ -13,7 +13,7 @@ Answer status and scope questions from STATUS.md only. Don't infer scope from RE
 ## Workflow (solo, pre-production)
 
 - Commit straight to `main`. No branches, GitHub issues or PRs in this repo until production.
-- Commit message: one line, `<M#|S#>: <what>`, no body.
+- Commit message: one line, `<M#|S#>: <what>`, no body. Never add `Co-Authored-By` or any other trailer.
 - `agent/*` branches and broker-opened PRs are product behavior for app repos, not a workflow for this repo.
 
 ## Commands
