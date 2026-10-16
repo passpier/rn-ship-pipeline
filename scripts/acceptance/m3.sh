@@ -227,8 +227,9 @@ as_agent() {
 }
 as_agent_sh() { as_agent /bin/sh -c "cd ~ && $1"; }
 db_of() { echo "$AGENT_HOME/.rnship/m3-$1/orchestrator.db"; }
-# sql ADAPTER QUERY prints the rows as a JSON array ([] when there are none).
-sql() { local out; out=$(as_agent /usr/bin/sqlite3 -readonly -json "$(db_of "$1")" "$2"); echo "${out:-[]}"; }
+# sql ADAPTER QUERY prints the rows as a JSON array ([] when there are none). Not -readonly:
+# after a tick the WAL's -shm is gone, and a read-only connection can't recreate it.
+sql() { local out; out=$(as_agent /usr/bin/sqlite3 -json "$(db_of "$1")" "$2"); echo "${out:-[]}"; }
 states_of() { sql "$1" "SELECT key, state FROM tasks ORDER BY id" | jq -r 'map("\(.key)=\(.state)") | join(" ")'; }
 state_of() { sql "$1" "SELECT state FROM tasks WHERE key = '$2'" | jq -r '.[0].state // "missing"'; }
 key_var() { tr 'a-z-' 'A-Z_' <<<"$1" | tr -d '_'; } # claude-p → CLAUDEP
