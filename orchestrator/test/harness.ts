@@ -28,6 +28,9 @@ export function harness(script: FakeScript = {}) {
   const repo = join(dir, 'repo');
   mkdirSync(repo);
   gitIn(repo, 'init', '-q', '-b', 'main');
+  // A real app checkout has an identity (the agent's); the adapter's own commits rely on it.
+  gitIn(repo, 'config', 'user.email', 't@example.com');
+  gitIn(repo, 'config', 'user.name', 't');
   writeFileSync(join(repo, 'README.md'), 'app\n');
   writeFileSync(join(repo, '.gitignore'), '.rnship/state/\n');
   commitAll(repo, 'base');
