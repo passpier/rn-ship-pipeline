@@ -33,6 +33,8 @@ export const CLAUDE_ERROR_PATTERNS = [
 
 /** What the shim prints when the guard plugin isn't loaded. The ralphex adapter makes it an error pattern. */
 export const PLUGIN_MISSING = 'RNSHIP: plugin_missing';
+/** What the shim prints when the session runs another model than the pinned `--model` (design §6). */
+export const MODEL_MISMATCH = 'RNSHIP: model_mismatch';
 
 export type InitEvent = { model?: string; plugins: string[]; pluginErrors: unknown[] };
 
@@ -43,6 +45,9 @@ export type StreamSummary = {
   rateLimit?: { kind: LimitKind; resetAt?: string };
   /** Text of error-shaped events: is_error results and API-error assistant messages. */
   errors: string[];
+  /** The last `result` event's text and subtype (e.g. `success`, `error_max_turns`). */
+  resultText?: string;
+  resultSubtype?: string;
 };
 
 type Event = Record<string, unknown>;
@@ -73,6 +78,12 @@ export function checkInit(init: InitEvent | undefined, guard: string): { ok: tru
   if (!init.plugins.includes(guard)) return { ok: false, reason: `guard plugin ${guard} is not loaded (plugins: ${init.plugins.join(', ') || 'none'})` };
   if (init.pluginErrors.length > 0) return { ok: false, reason: `plugin errors: ${JSON.stringify(init.pluginErrors)}` };
   return { ok: true };
+}
+
+/** Fails closed: a session must run exactly the pinned model it was asked for, never a substitute. */
+export function checkModel(init: InitEvent, requested: string | undefined): { ok: true } | { ok: false; reason: string } {
+  if (requested === undefined || init.model === requested) return { ok: true };
+  return { ok: false, reason: `asked for ${requested}, session runs ${init.model ?? '(unknown)'}` };
 }
 
 export function limitKindOf(text: string): LimitKind {
@@ -115,6 +126,8 @@ export function summarize(text: string): StreamSummary {
       summary.usage.outputTokens += Number(usage.output_tokens ?? 0);
       if (Array.isArray(event.permission_denials)) summary.permissionDenials.push(...event.permission_denials);
       if (event.is_error === true && typeof event.result === 'string') summary.errors.push(event.result);
+      summary.resultText = typeof event.result === 'string' ? event.result : undefined;
+      summary.resultSubtype = typeof event.subtype === 'string' ? event.subtype : undefined;
     }
   }
   return summary;
@@ -131,5 +144,7 @@ export function combine(summaries: StreamSummary[]): StreamSummary {
     permissionDenials: summaries.flatMap((s) => s.permissionDenials),
     rateLimit: summaries.findLast((s) => s.rateLimit)?.rateLimit,
     errors: summaries.flatMap((s) => s.errors),
+    resultText: summaries.findLast((s) => s.resultText !== undefined)?.resultText,
+    resultSubtype: summaries.findLast((s) => s.resultSubtype !== undefined)?.resultSubtype,
   };
 }

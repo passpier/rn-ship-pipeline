@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   approvalSubject,
+  ClaudePExecutor,
   desktopNotify,
   FakeExecutor,
   getRun,
@@ -61,24 +62,23 @@ const GUARD_PLUGIN_DIR = fileURLToPath(new URL('../../plugin', import.meta.url))
 
 export function makeExecutor(
   kind: string | undefined,
-  opts: { fakeScript?: string; ralphex?: string; settings?: string; review?: boolean; home: string },
+  opts: { fakeScript?: string; ralphex?: string; settings?: string; pluginDirs?: string[]; review?: boolean; home: string },
 ): Executor {
   if (kind === 'fake') {
     if (!opts.fakeScript) throw new Error('--executor fake needs --fake-script <json>');
     return FakeExecutor.fromFile(opts.fakeScript);
   }
-  if (kind === 'ralphex') {
-    // The settings file must be the compiled executor-settings.json (ADR 0002).
-    if (!opts.settings) throw new Error('--executor ralphex needs --settings <executor-settings.json>');
-    return new RalphexExecutor({
-      ralphex: opts.ralphex ?? 'ralphex',
-      pluginDir: GUARD_PLUGIN_DIR,
-      settingsFile: opts.settings,
-      workDir: join(opts.home, 'ralphex'),
-      review: opts.review,
-    });
-  }
-  throw new Error(`unknown executor: ${kind ?? '(none)'}; use --executor fake or ralphex`);
+  if (kind !== 'ralphex' && kind !== 'claude-p') throw new Error(`unknown executor: ${kind ?? '(none)'}; use --executor fake, claude-p or ralphex`);
+  // The settings file must be the compiled executor-settings.json (ADR 0002).
+  if (!opts.settings) throw new Error(`--executor ${kind} needs --settings <executor-settings.json>`);
+  const session = {
+    pluginDir: GUARD_PLUGIN_DIR,
+    extraPluginDirs: opts.pluginDirs?.map((dir) => resolve(dir)),
+    settingsFile: resolve(opts.settings),
+    workDir: join(opts.home, kind),
+    review: opts.review,
+  };
+  return kind === 'ralphex' ? new RalphexExecutor({ ...session, ralphex: opts.ralphex ?? 'ralphex' }) : new ClaudePExecutor(session);
 }
 
 export { desktopNotify };

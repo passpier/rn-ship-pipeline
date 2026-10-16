@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classify,
   completedTaskNumbers,
+  MODEL_MISMATCH,
   PLUGIN_MISSING,
   CLAUDE_LIMIT_PATTERNS,
   RalphexExecutor,
@@ -64,6 +65,7 @@ describe('ralphex adapter config', () => {
     expect(config).not.toContain('dangerously-skip-permissions');
     expect(config).toMatch(/^task_retry_count = 0$/m);
     expect(config).toMatch(new RegExp(`^claude_error_patterns = .*${PLUGIN_MISSING}`, 'm'));
+    expect(config).toMatch(new RegExp(`^claude_error_patterns = .*${MODEL_MISMATCH}`, 'm'));
   });
 
   it("refuses an argument ralphex's splitter would mangle", () => {
@@ -88,6 +90,7 @@ describe('ralphex result mapping', () => {
     expect(classify({ ...base, exitCode: 0, output: 'aborted by user, plan left in place', footer: 'Failed: x - user aborted' }).status).toBe('crashed');
     expect(classify({ ...base, aborted: true, timedOut: true, output: '' }).status).toBe('timeout');
     expect(classify({ ...base, output: `${PLUGIN_MISSING}: guard plugin rnship is not loaded` })).toMatchObject({ status: 'crashed', reason: 'plugin_missing' });
+    expect(classify({ ...base, output: `${MODEL_MISMATCH}: asked for a, session runs b` })).toMatchObject({ status: 'crashed', reason: 'model_mismatch' });
   });
 
   it('takes the limit kind and reset time from the transcript when Claude sent a rate-limit event', () => {
@@ -106,9 +109,9 @@ describe('ralphex result mapping', () => {
 });
 
 describe('claude shim', () => {
-  const shim = (stub: object) => {
+  const shim = (stub: object, args = ['-p', 'ok', '--model', 'claude-haiku-5-5']) => {
     const transcripts = mkdtempSync(join(tmpdir(), 'rnship-shim-'));
-    const run = spawnSync(SHIM, ['-p', 'ok', '--model', 'claude-haiku-5-5'], {
+    const run = spawnSync(SHIM, args, {
       encoding: 'utf8',
       env: { ...process.env, RNSHIP_CLAUDE: STUB, RNSHIP_TRANSCRIPTS: transcripts, STUB_SCENARIO: scenario(stub) },
     });
@@ -130,6 +133,16 @@ describe('claude shim', () => {
       expect(run.stdout).toContain(PLUGIN_MISSING);
       expect(run.stdout).not.toContain('"type":"result"');
     }
+  });
+
+  it('stops a session that runs another model than the pinned --model, the last one on argv winning', () => {
+    const run = shim({ calls: ['wrong_model'] });
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain(`${MODEL_MISMATCH}: asked for claude-haiku-5-5, session runs claude-substitute-0`);
+    expect(run.stdout).not.toContain('"type":"result"');
+
+    // ralphex appends its own --model after ours (S8 X5); the stub runs the last one.
+    expect(shim({}, ['-p', 'ok', '--model', 'claude-opus-5-5', '--model', 'claude-haiku-5-5']).status).toBe(0);
   });
 
   it('fails closed without a transcript dir', () => {

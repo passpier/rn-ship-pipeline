@@ -4,15 +4,17 @@
 // through to the caller, and keeps a copy in $RNSHIP_TRANSCRIPTS. It fails closed on the first `system/init` event: if the guard
 // plugin ($RNSHIP_GUARD_PLUGIN, default `rnship`) isn't loaded or a plugin failed to load,
 // it kills claude before any tool call and prints PLUGIN_MISSING, which the ralphex adapter
-// puts in `claude_error_patterns` (S2 T3f, S8).
+// puts in `claude_error_patterns` (S2 T3f, S8). Likewise, if the session runs another model
+// than the `--model` on its argv, it prints MODEL_MISMATCH (design §6: never substitute).
 import { spawn } from 'node:child_process';
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkInit, initOf, parseLine, PLUGIN_MISSING } from '../src/streamJson.ts';
+import { checkInit, checkModel, initOf, MODEL_MISMATCH, parseLine, PLUGIN_MISSING } from '../src/streamJson.ts';
 
 const claude = process.env.RNSHIP_CLAUDE || 'claude';
 const guard = process.env.RNSHIP_GUARD_PLUGIN || 'rnship';
 const dir = process.env.RNSHIP_TRANSCRIPTS;
+const requestedModel = modelArg(process.argv.slice(2));
 if (!dir) {
   console.log(`${PLUGIN_MISSING}: RNSHIP_TRANSCRIPTS is not set`);
   process.exit(1);
@@ -40,16 +42,28 @@ child.stdout.on('data', (chunk: Buffer) => {
         initChecked = true;
         const check = checkInit(init, guard);
         if (!check.ok) return refuse(check.reason);
+        const model = checkModel(init, requestedModel);
+        if (!model.ok) return refuse(model.reason, MODEL_MISMATCH);
       }
     }
     process.stdout.write(line + '\n');
   }
 });
 
-function refuse(reason: string): void {
+function refuse(reason: string, marker = PLUGIN_MISSING): void {
   refused = true;
   child.kill('SIGTERM');
-  process.stdout.write(`${PLUGIN_MISSING}: ${reason}\n`);
+  process.stdout.write(`${marker}: ${reason}\n`);
+}
+
+/** The last `--model <id>` or `--model=<id>`: ralphex appends its own after ours (S8 X5). */
+function modelArg(args: string[]): string | undefined {
+  let model: string | undefined;
+  args.forEach((arg, i) => {
+    if (arg === '--model') model = args[i + 1];
+    else if (arg.startsWith('--model=')) model = arg.slice('--model='.length);
+  });
+  return model;
 }
 
 child.on('error', (error) => {

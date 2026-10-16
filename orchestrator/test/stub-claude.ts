@@ -4,8 +4,17 @@
 //   done      tick the first unfinished task's boxes, commit, and signal (ALL_TASKS_DONE when none is left)
 //   fail      signal TASK_FAILED
 //   limit     a five-hour rate-limit rejection; limit_weekly is the seven-day one
+//   commit_then_limit  (claude-p) commit partial work for the task, then the five-hour limit
 //   denied    like done, plus a permission denial in the result
+//   signal_in_text  (claude-p) the done signal in assistant text only, not in the final result
+//   dirty     (claude-p) write the task's file but leave it uncommitted
+//   noop      (claude-p) change nothing and still signal done
+//   hang      print init, then nothing for 10 s
+//   wrong_model  init reports another model than --model
+//   api500    an API Error: 500 result
 // `init` is ok (guard plugin loaded), no_plugin or plugin_error. Review prompts get REVIEW_DONE.
+// Prompts that start with `# rnship task: <key>` (the claude-p adapter) get the work done
+// for that key and the signal in the final result, as a real session would end.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -20,7 +29,7 @@ writeFileSync(countPath, String(n + 1));
 const action = scenario.calls?.[n] ?? 'done';
 
 const argv = process.argv.slice(2);
-const model = argv[argv.indexOf('--model') + 1] ?? 'unknown';
+const model = argv[argv.lastIndexOf('--model') + 1] ?? 'unknown';
 const promptFlag = argv.indexOf('-p');
 const prompt = promptFlag >= 0 ? argv[promptFlag + 1]! : readFileSync(0, 'utf8');
 
@@ -33,18 +42,63 @@ const init = scenario.init ?? 'ok';
 emit({
   type: 'system',
   subtype: 'init',
-  model,
+  model: action === 'wrong_model' ? 'claude-substitute-0' : model,
   plugins: init === 'no_plugin' ? [] : [{ name: 'rnship', path: '/plugin' }],
   plugin_errors: init === 'plugin_error' ? [{ plugin: 'rnship', error: 'bad hooks.json' }] : [],
+  stub_argv: argv,
+  stub_prompt: prompt,
 });
 
-if (action === 'limit' || action === 'limit_weekly') {
+const taskKey = /^# rnship task: (\S+)/.exec(prompt)?.[1];
+const commit = (file: string, message: string) => {
+  mkdirSync('stub', { recursive: true });
+  writeFileSync(join('stub', file), `${message}\n`);
+  execFileSync('git', ['add', 'stub']);
+  execFileSync('git', ['-c', 'user.email=stub@example.com', '-c', 'user.name=stub', 'commit', '-q', '-m', message]);
+};
+
+if (action === 'commit_then_limit') commit(`${taskKey}-partial.txt`, `wip: ${taskKey}`);
+if (action === 'limit' || action === 'limit_weekly' || action === 'commit_then_limit') {
   const weekly = action === 'limit_weekly';
   emit({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: weekly ? 'seven_day' : 'five_hour', resetsAt: scenario.resetsAt } });
   const text = weekly ? "You've hit your weekly limit · resets 1pm" : "You've hit your session limit · resets 3pm";
   emit({ type: 'assistant', message: { content: [{ type: 'text', text }] }, error: 'rate_limit', is_api_error_message: true });
   emit({ type: 'result', subtype: 'success', is_error: true, result: text, api_error_status: 429 });
   process.exit(1);
+}
+
+if (action === 'hang') {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10_000);
+  process.exit(0);
+}
+if (action === 'api500') {
+  emit({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 500 {"type":"error","error":{"type":"api_error"}}' });
+  process.exit(1);
+}
+
+if (taskKey) {
+  const denials = action === 'denied' ? [{ tool_name: 'Bash', tool_input: { command: 'npm install left-pad' } }] : [];
+  if (action === 'fail') {
+    result({ result: 'tests keep failing\n<<<RNSHIP:TASK_FAILED>>> jest: 2 failing' });
+    process.exit(0);
+  }
+  if (action === 'dirty') {
+    mkdirSync('stub', { recursive: true });
+    writeFileSync(join('stub', `${taskKey}.txt`), 'uncommitted\n');
+  } else if (action !== 'noop') {
+    commit(`${taskKey}.txt`, `feat: ${taskKey}`);
+  }
+  if (action === 'signal_in_text') {
+    say('<<<RNSHIP:TASK_DONE>>>');
+    result({ result: 'stopped early' });
+  } else {
+    result({ result: `done ${taskKey}\n<<<RNSHIP:TASK_DONE>>>`, permission_denials: denials });
+  }
+  process.exit(0);
+}
+if (/^# rnship review: /.test(prompt)) {
+  result({ result: 'looks good\n<<<RNSHIP:REVIEW_DONE>>>' });
+  process.exit(0);
 }
 
 const planPath = /Read the plan file at (\S+?\.md)/.exec(prompt)?.[1];
@@ -78,12 +132,7 @@ for (let i = 0; i < lines.length; i++) {
   }
 }
 writeFileSync(planPath, lines.join('\n'));
-if (task) {
-  mkdirSync('stub', { recursive: true });
-  writeFileSync(join('stub', `${basename(planPath, '.md')}-task-${task}.txt`), `task ${task}\n`);
-  execFileSync('git', ['add', 'stub']);
-  execFileSync('git', ['-c', 'user.email=stub@example.com', '-c', 'user.name=stub', 'commit', '-q', '-m', `feat: task ${task}`]);
-}
+if (task) commit(`${basename(planPath, '.md')}-task-${task}.txt`, `feat: task ${task}`);
 const remaining = lines.some((l) => l.startsWith('- [ ]'));
 say(remaining ? `finished task ${task}` : '<<<RALPHEX:ALL_TASKS_DONE>>>');
 result(action === 'denied' ? { permission_denials: [{ tool_name: 'Bash', tool_input: { command: 'npm install left-pad' } }] } : {});

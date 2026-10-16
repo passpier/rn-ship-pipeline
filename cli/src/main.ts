@@ -46,10 +46,13 @@ const USAGE = `usage:
   rnship tasks import <tasks.yaml> --app <name> --flow <A|B> --repo <app-repo> [--db <path>]
   rnship tasks list [--db <path>]
   rnship tick [--db <path>] [--home <dir>] [--batch <n>] --executor fake --fake-script <json>
+  rnship tick [--db <path>] [--home <dir>] [--batch <n>] --executor claude-p --settings <executor-settings.json>
+              [--plugin-dir <knowledge-plugin>]... [--review]
   rnship tick [--db <path>] [--home <dir>] [--batch <n>] --executor ralphex --settings <executor-settings.json>
-              [--ralphex <bin>] [--review]
+              [--ralphex <bin>] [--plugin-dir <knowledge-plugin>]... [--review]
       one idempotent orchestrator pass (run by the LaunchAgent); the DB defaults to $RNSHIP_DB
-      or ~/.rnship/orchestrator.db, and worktrees and bundles go next to it
+      or ~/.rnship/orchestrator.db, and worktrees and bundles go next to it. The guard plugin is
+      always loaded; --plugin-dir adds knowledge plugins such as plugins/rn-game
   rnship task approve <task-id> <head-sha> [--db <path>]
       run as you: approves the task's gated changes at exactly that commit`;
 
@@ -111,6 +114,7 @@ async function main(argv: string[]): Promise<void> {
       ralphex: { type: 'string' },
       settings: { type: 'string' },
       review: { type: 'boolean' },
+      'plugin-dir': { type: 'string', multiple: true },
     },
   });
 
@@ -223,6 +227,7 @@ async function main(argv: string[]): Promise<void> {
           fakeScript: values['fake-script'],
           ralphex: values.ralphex,
           settings: values.settings,
+          pluginDirs: values['plugin-dir'],
           review: values.review,
           home,
         }),

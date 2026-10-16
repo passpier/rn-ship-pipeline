@@ -1,4 +1,5 @@
 import type { ExecRequest } from '../executor.ts';
+import { fenced, oneLine } from './text.ts';
 
 // A batch of tasks → a ralphex plan file (S8 X9). Task bodies and failure digests go inside
 // fenced blocks: ralphex's parser skips fenced code, so nothing in them can become a task
@@ -9,14 +10,6 @@ const TASK_HEADER = /^###\s+(?:Task|Iteration)\s+([^:]+?):\s*(.*)$/;
 const CHECKBOX = /^\s*-\s+\[([ xX])\]\s*(.*)$/;
 const SECTION_END = /^#{1,2}\s/;
 const FENCE = /^\s*(`{3,}|~{3,})/;
-
-function fenced(text: string): string {
-  const longest = Math.max(2, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
-  const fence = '`'.repeat(longest + 1);
-  return `${fence}text\n${text.trimEnd()}\n${fence}`;
-}
-
-const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 export function renderPlan(req: Pick<ExecRequest, 'tasks' | 'failureDigest'>, opts: { sandboxPrefix?: string } = {}): string {
   const prefix = opts.sandboxPrefix ?? 'rnship sandbox run --';

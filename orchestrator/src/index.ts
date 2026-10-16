@@ -11,6 +11,20 @@ export { ACTIVE_STATES, canTransition, getTask, STATES, transition, TransitionEr
 export { importTasks, loadTasks, parseTasks, TasksFileSchema, type ImportResult, type TasksFile } from './tasks.ts';
 export { approvalSubject, tick, type BatchReport, type DiffCheck, type Gate, type TickOptions, type TickReport, type Validate } from './tick.ts';
 export { ensureWorktree, git, headSha, resetWorktree } from './worktree.ts';
-export { classify, RalphexExecutor, ralphexArg, SHIM, type RalphexOptions } from './executors/ralphex.ts';
+export { claudeArgs, SHIM, type SessionOptions } from './executors/claudeSession.ts';
+export { classify, RalphexExecutor, ralphexArg, type RalphexOptions } from './executors/ralphex.ts';
 export { completedTaskNumbers, renderPlan } from './executors/ralphexPlan.ts';
-export { checkInit, combine, limitKindOf, PLUGIN_MISSING, CLAUDE_ERROR_PATTERNS, CLAUDE_LIMIT_PATTERNS, summarize, type StreamSummary } from './streamJson.ts';
+export { ClaudePExecutor, classifySession, type ClaudePOptions } from './executors/claudeP.ts';
+export { renderReviewPrompt, renderTaskPrompt, SIGNALS, signalOf } from './executors/claudePPrompt.ts';
+export {
+  checkInit,
+  checkModel,
+  combine,
+  limitKindOf,
+  MODEL_MISMATCH,
+  PLUGIN_MISSING,
+  CLAUDE_ERROR_PATTERNS,
+  CLAUDE_LIMIT_PATTERNS,
+  summarize,
+  type StreamSummary,
+} from './streamJson.ts';

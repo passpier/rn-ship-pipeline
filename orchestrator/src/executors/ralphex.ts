@@ -1,55 +1,23 @@
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { ModelSpec } from '@rnship/policy';
 import type { ExecRequest, ExecResult, Executor, ProbeResult } from '../executor.ts';
+import { claudeArgs, limitPatterns, probeQuota, readTranscripts, SHIM, spawnSession, timedOut, type SessionOptions } from './claudeSession.ts';
 import { completedTaskNumbers, renderPlan } from './ralphexPlan.ts';
-import { combine, limitKindOf, matchPattern, PLUGIN_MISSING, CLAUDE_ERROR_PATTERNS, CLAUDE_LIMIT_PATTERNS, summarize, type StreamSummary } from '../streamJson.ts';
+import { limitKindOf, MODEL_MISMATCH, PLUGIN_MISSING, CLAUDE_ERROR_PATTERNS, type StreamSummary } from '../streamJson.ts';
 
 // The ralphex adapter (pinned to v1.7.0; facts in docs/spikes/S8.md). Each run gets its
 // own config dir, so the app repo's `.ralphex/` never configures it, and the orchestrator
 // keeps the retries (task_retry_count = 0, no --wait). claude_command is our shim, which
-// fails closed on a missing guard plugin and keeps the transcripts ralphex doesn't parse.
+// fails closed on a missing guard plugin or a substituted model, and keeps the transcripts
+// ralphex doesn't parse.
 
-export const SHIM = fileURLToPath(new URL('../../bin/claude-shim.ts', import.meta.url));
-
-/** Claude Code session markers ralphex v1.7.0 strips from claude's env; we strip them from ralphex's. */
-const SESSION_ENV = [
-  'CLAUDECODE',
-  'CLAUDE_CODE_ENTRYPOINT',
-  'CLAUDE_CODE_EXECPATH',
-  'CLAUDE_CODE_SESSION_ID',
-  'CLAUDE_CODE_CHILD_SESSION',
-  'CLAUDE_CODE_BRIDGE_SESSION_ID',
-  'CLAUDE_CODE_MESSAGING_SOCKET',
-  'CLAUDE_CODE_MESSAGING_TOKEN',
-  'CLAUDE_PID',
-  'CLAUDE_EFFORT',
-];
-
-type Env = Record<string, string | undefined>;
-
-export type RalphexOptions = {
+export type RalphexOptions = SessionOptions & {
   /** The ralphex binary. */
   ralphex: string;
-  /** The real claude command the shim runs. */
-  claude?: string;
-  /** The guard plugin dir (`plugin/`), always loaded. */
-  pluginDir: string;
-  /** Optional knowledge plugins, e.g. plugins/rn-game. */
-  extraPluginDirs?: string[];
-  /** The compiled executor-settings.json (ADR 0002: a file, never inline JSON). */
-  settingsFile: string;
-  guardPlugin?: string;
-  /** Per-run config dirs, plans and transcripts go here. */
-  workDir: string;
-  /** Limit patterns beyond ralphex's defaults (from S4). */
-  extraLimitPatterns?: string[];
   maxIterations?: number;
   /** The orchestrator runs the review pass only when this is true. */
   review?: boolean;
-  env?: Env;
 };
 
 /** ralphex splits args on spaces with quote grouping (S8 X5): quote paths, refuse what can't be quoted. */
@@ -72,34 +40,12 @@ export class RalphexExecutor implements Executor {
     return { review: this.opts.review ?? false };
   }
 
-  /** Flags every Claude session gets, in ralphex's claude_args and in the probe. */
-  claudeArgs(): string[] {
-    return [
-      '--output-format',
-      'stream-json',
-      '--verbose',
-      '--permission-mode',
-      'dontAsk',
-      '--plugin-dir',
-      this.opts.pluginDir,
-      ...(this.opts.extraPluginDirs ?? []).flatMap((dir) => ['--plugin-dir', dir]),
-      '--settings',
-      this.opts.settingsFile,
-      '--setting-sources',
-      'user',
-    ];
-  }
-
-  limitPatterns(): string[] {
-    return [...CLAUDE_LIMIT_PATTERNS, ...(this.opts.extraLimitPatterns ?? [])];
-  }
-
   config(): string {
-    const errorPatterns = [...new Set([...CLAUDE_ERROR_PATTERNS, ...(this.opts.extraLimitPatterns ?? []), PLUGIN_MISSING])];
+    const errorPatterns = [...new Set([...CLAUDE_ERROR_PATTERNS, ...(this.opts.extraLimitPatterns ?? []), PLUGIN_MISSING, MODEL_MISMATCH])];
     return [
       `claude_command = ${SHIM}`,
-      `claude_args = ${this.claudeArgs().map(ralphexArg).join(' ')}`,
-      `claude_limit_patterns = ${this.limitPatterns().join(',')}`,
+      `claude_args = ${claudeArgs(this.opts).map(ralphexArg).join(' ')}`,
+      `claude_limit_patterns = ${limitPatterns(this.opts).join(',')}`,
       `claude_error_patterns = ${errorPatterns.join(',')}`,
       'task_retry_count = 0',
       'move_plan_on_completion = false',
@@ -138,7 +84,7 @@ export class RalphexExecutor implements Executor {
       `${req.idleTimeoutSec}s`,
       plan,
     ];
-    const run = await this.spawn(this.opts.ralphex, args, req.worktree, transcripts, signal);
+    const run = await spawnSession(this.opts, this.opts.ralphex, args, { cwd: req.worktree, transcripts, signal });
     writeFileSync(join(dir, 'ralphex.log'), run.output);
 
     const summary = readTranscripts(transcripts);
@@ -147,16 +93,16 @@ export class RalphexExecutor implements Executor {
     const result = classify({
       exitCode: run.code,
       aborted: run.aborted,
-      timedOut: signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError',
+      timedOut: timedOut(signal),
       output: run.output,
       footer: progress.footer,
       summary,
-      limitPatterns: this.limitPatterns(),
+      limitPatterns: limitPatterns(this.opts),
     });
     return {
       ...result,
       completedTaskIds:
-        result.reason === 'plugin_missing'
+        result.reason === 'plugin_missing' || result.reason === 'model_mismatch'
           ? []
           : result.status === 'passed' && req.phase === 'review'
             ? req.tasks.map((t) => t.id)
@@ -169,49 +115,9 @@ export class RalphexExecutor implements Executor {
     };
   }
 
-  async probe(model: ModelSpec): Promise<ProbeResult> {
-    mkdirSync(this.opts.workDir, { recursive: true });
-    const transcripts = join(mkdtempSync(join(this.opts.workDir, 'probe-')), 'transcripts');
-    const args = ['-p', 'ok', '--model', model.id, '--max-turns', '1', ...this.claudeArgs()];
-    const run = await this.spawn(SHIM, args, this.opts.workDir, transcripts, AbortSignal.timeout(120_000));
-    const summary = readTranscripts(transcripts);
-    const limit = summary.rateLimit ?? limitIn([run.output, ...summary.errors].join('\n'), this.limitPatterns());
-    if (limit) return { ok: false, resetAt: limit.resetAt, limitKind: limit.kind };
-    // Anything else that went wrong is also "not open yet": park until the next probe (design §4).
-    return run.code === 0 ? { ok: true } : { ok: false, limitKind: 'unknown' };
+  probe(model: ModelSpec): Promise<ProbeResult> {
+    return probeQuota(this.opts, model);
   }
-
-  private spawn(command: string, args: string[], cwd: string, transcripts: string, signal: AbortSignal) {
-    const env: Env = { ...process.env, ...this.opts.env };
-    for (const name of SESSION_ENV) delete env[name];
-    env.RNSHIP_CLAUDE = this.opts.claude ?? env.RNSHIP_CLAUDE ?? 'claude';
-    env.RNSHIP_TRANSCRIPTS = transcripts;
-    env.RNSHIP_GUARD_PLUGIN = this.opts.guardPlugin ?? 'rnship';
-    // Own process group, stdin from /dev/null: ralphex's pause prompt must never read input,
-    // and an abort stops it with SIGTERM to the whole group, never SIGQUIT (S8 X1).
-    const child = spawn(command, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-    let output = '';
-    child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
-    child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
-    let aborted = false;
-    const stop = () => {
-      aborted = true;
-      if (child.pid) process.kill(-child.pid, 'SIGTERM');
-    };
-    signal.addEventListener('abort', stop, { once: true });
-    return new Promise<{ code: number; output: string; aborted: boolean }>((resolve) => {
-      child.once('error', (error) => resolve({ code: 127, output: `${output}\n${error.message}`, aborted }));
-      child.once('close', (code, sig) => {
-        signal.removeEventListener('abort', stop);
-        resolve({ code: code ?? (sig ? 128 : 1), output, aborted });
-      });
-    });
-  }
-}
-
-function readTranscripts(dir: string): StreamSummary {
-  if (!existsSync(dir)) return combine([]);
-  return combine(readdirSync(dir).sort().map((file) => summarize(readFileSync(join(dir, file), 'utf8'))));
 }
 
 function readProgress(worktree: string, stem: string): { footer?: string; tail: string } {
@@ -221,11 +127,6 @@ function readProgress(worktree: string, stem: string): { footer?: string; tail: 
   const lines = readFileSync(join(dir, file), 'utf8').trimEnd().split('\n');
   const footer = lines.findLast((l) => /^(Completed|Failed): /.test(l));
   return { footer, tail: lines.slice(-20).join('\n').slice(-2000) };
-}
-
-function limitIn(text: string, patterns: string[]): { kind: ReturnType<typeof limitKindOf>; resetAt?: string } | undefined {
-  const hit = matchPattern(text, patterns);
-  return hit ? { kind: limitKindOf(hit) } : undefined;
 }
 
 export type Classified = Pick<ExecResult, 'status' | 'resetAt' | 'limitKind' | 'reason' | 'failureDigest'>;
@@ -244,6 +145,7 @@ export function classify(input: {
   const reason = errorLine ?? input.footer;
   if (input.aborted) return { status: input.timedOut ? 'timeout' : 'crashed', reason: 'aborted' };
   if (input.output.includes(PLUGIN_MISSING)) return { status: 'crashed', reason: 'plugin_missing', failureDigest: lineWith(input.output, PLUGIN_MISSING) };
+  if (input.output.includes(MODEL_MISMATCH)) return { status: 'crashed', reason: 'model_mismatch', failureDigest: lineWith(input.output, MODEL_MISMATCH) };
 
   const limit = /detected limit pattern: "([^"]*)"/.exec(input.output)?.[1];
   if (limit !== undefined || input.summary.rateLimit) {
