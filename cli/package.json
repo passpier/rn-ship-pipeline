@@ -7,6 +7,7 @@
     "rnship": "./src/main.ts"
   },
   "dependencies": {
+    "@rnship/orchestrator": "workspace:*",
     "@rnship/ota": "workspace:*",
     "@rnship/policy": "workspace:*",
     "@rnship/release": "workspace:*"

@@ -1,0 +1,7 @@
+# Model routing tiers (design §6). Full pinned model IDs, never floating aliases, so a
+# run can be reproduced. Escalation moves a task one tier up. `effort` is optional.
+version: 1
+tiers:
+  T0: { id: claude-haiku-5-5 }
+  T1: { id: claude-sonnet-5-5 }
+  T2: { id: claude-opus-5-5, effort: high }

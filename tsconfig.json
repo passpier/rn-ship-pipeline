@@ -12,6 +12,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["policy", "ota", "cli", "plugin", "release", "plugins", "*.ts"],
+  "include": ["policy", "ota", "cli", "plugin", "release", "orchestrator", "plugins", "*.ts"],
   "exclude": ["**/node_modules"]
 }

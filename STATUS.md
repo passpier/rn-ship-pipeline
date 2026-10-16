@@ -20,13 +20,14 @@ Last updated: 2026-10-16. This file is the source of truth for scope, progress a
 - **M0:** policy merge/compile, OTA classifier, `rnship` CLI, fixtures.
 - **M1 (mostly):** guard plugin, executor settings, `rnship policy check`, approve commands, validation sandbox, release workflow templates, actor gate, job permissions.
 - **Spikes:** S0 identity + GitHub broker, S1 Pro billing, S2 hooks under `-p`, S6 GitHub/EAS budgets, S8 ralphex internals (pinned v1.7.0; it doesn't run validation commands or parse reset times). Findings in `docs/spikes/`.
+- **M2 (core):** orchestrator state machine (SQLite), tick, ledger, signal + stage dedup, task approvals, fake executor, `rnship tick|tasks|task approve`; acceptance simulations pass.
 - **rn-game plugin:** `rn-2d-game` skill.
 
 ## Next
 
 1. **Finish M1 → ship v0.1:** acceptance (a) as `rnship-agent` (`eas submit`, `eas update --channel production` and `gh pr merge` all fail) and (e) fixture app repo calling the workflows pinned by SHA (`scripts/acceptance/m1e.sh`).
 2. **S4** quota error shape (five-hour window). Not blocking M2: unrecognized limits park until a probe.
-3. **M2** orchestrator state machine (SQLite, fake + stub ralphex executors). No LLM.
+3. **Finish M2:** ralphex adapter against a stub `claude_command` (S8 shapes it). No LLM.
 4. **M3** live `claude-p` and ralphex adapters on Pro, as `rnship-agent` → ships **v0.2** with M2. First real app dev happens here.
 5. **S5** fingerprint runtime policy + **S9** Sentry source maps for EAS Update + **S10** EAS `require-approval` (optional).
 6. **M4** Flow B on Sentry (poll, triage, fix, OTA, rollout, rollback). **S7** Crashlytics later (M4b).

@@ -32,6 +32,9 @@ importers:
 
   cli:
     dependencies:
+      '@rnship/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
       '@rnship/ota':
         specifier: workspace:*
         version: link:../ota
@@ -74,6 +77,21 @@ importers:
       react-native:
         specifier: 0.86.3
         version: 0.86.3(@babel/core@7.29.7)(react@19.2.3)
+
+  orchestrator:
+    dependencies:
+      '@rnship/policy':
+        specifier: workspace:*
+        version: link:../policy
+      '@rnship/release':
+        specifier: workspace:*
+        version: link:../release
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
 
   ota:
     dependencies:

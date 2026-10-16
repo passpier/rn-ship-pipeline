@@ -4,5 +4,6 @@ packages:
   - cli
   - plugin
   - release
+  - orchestrator
   - fixtures/app
   - fixtures/extras

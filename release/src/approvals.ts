@@ -8,7 +8,7 @@ import { join } from 'node:path';
 // if the file is owned by the user it names, that user isn't the agent, and nobody
 // else can write it.
 
-export type ApprovalKind = 'baseline' | 'merge' | 'release' | 'change';
+export type ApprovalKind = 'baseline' | 'merge' | 'release' | 'change' | 'task';
 
 export type ApprovalRecord = {
   kind: ApprovalKind;

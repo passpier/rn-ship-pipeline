@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { classify, recordBuild } from '@rnship/ota';
-import { compilePolicy, loadBasePolicy, loadPolicy, mergePolicy, seatbeltProfile, type Policy } from '@rnship/policy';
+import { compilePolicy, loadBasePolicy, loadPolicy, loadRouting, mergePolicy, seatbeltProfile, type Policy } from '@rnship/policy';
 import {
   ApprovalError,
   baselineDigest,
@@ -17,7 +17,9 @@ import {
   writeApproval,
   type ApproveResult,
 } from '@rnship/release';
+import { importTasks, loadTasks, openDb, tick } from '@rnship/orchestrator';
 import { policyCheck } from './check.ts';
+import { dbPath, desktopNotify, makeExecutor, orchestratorHome, policyDiffCheck, sandboxValidate, taskApprove } from './orchestrate.ts';
 import { sandboxRun } from './sandbox.ts';
 
 const USAGE = `usage:
@@ -40,7 +42,14 @@ const USAGE = `usage:
       runs a validation command under sandbox-exec: no secrets, no persistence writes, network only via
       an allowlisting localhost proxy
   rnship ota record <project-root> --out <dir> --build-id <id>
-  rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]`;
+  rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]
+  rnship tasks import <tasks.yaml> --app <name> --flow <A|B> --repo <app-repo> [--db <path>]
+  rnship tasks list [--db <path>]
+  rnship tick [--db <path>] [--home <dir>] --executor fake --fake-script <json> [--batch <n>]
+      one idempotent orchestrator pass (run by the LaunchAgent); the DB defaults to $RNSHIP_DB
+      or ~/.rnship/orchestrator.db, and worktrees and bundles go next to it
+  rnship task approve <task-id> <head-sha> [--db <path>]
+      run as you: approves the task's gated changes at exactly that commit`;
 
 class UsageError extends Error {}
 
@@ -67,7 +76,7 @@ function required(values: Record<string, unknown>, ...names: string[]): void {
 }
 
 async function main(argv: string[]): Promise<void> {
-  const [group, command, ...rest] = argv;
+  const [group, command, ...rest] = argv[0] === 'tick' ? ['tick', '', ...argv.slice(1)] : argv;
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,
@@ -91,10 +100,16 @@ async function main(argv: string[]): Promise<void> {
       'from-branch': { type: 'string' },
       channel: { type: 'string' },
       home: { type: 'string' },
+      app: { type: 'string' },
+      flow: { type: 'string' },
+      db: { type: 'string' },
+      executor: { type: 'string' },
+      'fake-script': { type: 'string' },
+      batch: { type: 'string' },
     },
   });
 
-  switch (`${group} ${command}`) {
+  switch (command ? `${group} ${command}` : group) {
     case 'policy merge': {
       if (!positionals[0]) throw new UsageError('missing <project-policy.yaml>');
       console.log(JSON.stringify(merged(positionals[0], values.base), null, 2));
@@ -177,6 +192,43 @@ async function main(argv: string[]): Promise<void> {
         policy: values.policy ? merged(values.policy) : undefined,
       });
       console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    case 'tasks import': {
+      if (!positionals[0]) throw new UsageError('missing <tasks.yaml>');
+      required(values, 'app', 'flow', 'repo');
+      if (values.flow !== 'A' && values.flow !== 'B') throw new UsageError('--flow must be A or B');
+      const db = openDb(dbPath(values.db));
+      const file = loadTasks(positionals[0]);
+      console.log(JSON.stringify(importTasks(db, { app: values.app!, flow: values.flow, repo: resolve(values.repo!), file }, new Date()), null, 2));
+      return;
+    }
+    case 'tasks list': {
+      const db = openDb(dbPath(values.db));
+      const rows = db.prepare('SELECT id, run_id, key, state, phase, tier, validation_failures, resume_at, head_sha, failure_class FROM tasks ORDER BY id').all();
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    case 'tick': {
+      const path = dbPath(values.db);
+      const report = await tick({
+        db: openDb(path),
+        executor: makeExecutor(values.executor, { fakeScript: values['fake-script'] }),
+        routing: loadRouting(),
+        diffCheck: policyDiffCheck,
+        validate: sandboxValidate,
+        notify: desktopNotify,
+        home: orchestratorHome(path, values.home),
+        batchSize: values.batch === undefined ? undefined : Number(values.batch),
+      });
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    case 'task approve': {
+      const [taskId, sha] = positionals;
+      if (!taskId || !sha) throw new UsageError('missing <task-id> <head-sha>');
+      const record = taskApprove(dbPath(values.db), { taskId: Number(taskId), sha });
+      console.log(`approved task ${taskId} at ${sha}\n${record}`);
       return;
     }
     default:

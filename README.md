@@ -64,12 +64,32 @@ The output is `{ ios, android, reasons[], gates[], base_build_id, fingerprints }
 
 Recommended runtime policy: `runtimeVersion: { policy: "fingerprint" }`.
 
+## Orchestrator (`rnship tick`)
+The orchestrator owns all state in one SQLite file (`$RNSHIP_DB`, default `~/.rnship/orchestrator.db`, owned by `rnship-agent`). Executors are stateless adapters behind one interface. It's an M2 preview: only the `fake` executor ships so far.
+
+```sh
+rnship tasks import tasks.yaml --app <name> --flow A --repo <app-repo>   # idempotent
+rnship tick --executor fake --fake-script <json>                          # one pass; the LaunchAgent runs it every 15 min
+rnship tasks list
+rnship task approve <task-id> <head-sha>                                  # run as you: approves gated changes at exactly that commit
+```
+
+Each tick runs these steps:
+1. Reclaims tasks left behind by a killed tick.
+2. Reopens the Claude quota at its reset time, or after a probe when the reset time is unknown.
+3. Leases a batch of same-tier tasks into a per-run worktree on `agent/run-<id>`, and runs the executor.
+4. Re-runs each task's validation commands under the validation sandbox.
+5. Diff-checks the result with `rnship policy check`.
+
+Retries follow the failure class: a validation failure retries at the same tier, then one tier up (`policy/routing.yaml`), then goes to you. A gated change waits for `rnship task approve`, and a new commit invalidates that approval.
+
 ## Layout
-- `policy/`: schema, merge, compile, hook evaluator, and sandbox lists
+- `policy/`: schema, merge, compile, hook evaluator, sandbox lists, and model routing tiers
 - `ota/`: the classifier
 - `release/`: baseline, approvals, and approve commands
 - `plugin/`: the guard plugin
 - `plugins/rn-game/`: an optional knowledge plugin for building 2D games in Expo apps (skill `rn-2d-game`). It's listed in `.claude-plugin/marketplace.json`, so other projects can install it with `/plugin install rn-game --marketplace passpier/rn-ship-pipeline`.
+- `orchestrator/`: state machine, tick, ledger, signal and stage dedup, and executor adapters
 - `cli/`: the `rnship` bin, policy check, and the sandbox runner
 - `fixtures/`: the made-up Expo app used by tests
 - `.github/workflows/release-*.yml`: the reusable workflows
