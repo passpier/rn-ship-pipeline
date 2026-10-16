@@ -250,6 +250,19 @@ jobs_of() {
 }
 # conclusion_of RUN PREFIX [ATTEMPT]: conclusion of the job whose name starts with PREFIX.
 conclusion_of() { jobs_of "$1" "${3:-}" | sed -n "s/^$2[^=]*=//p" | head -n1; }
+# wait_job RUN PREFIX [ATTEMPT] is conclusion_of, retried for up to 2 minutes: a run can
+# report completed before its skipped reusable-workflow job is listed.
+wait_job() {
+  local c="" i
+  for i in $(seq 24); do
+    c=$(conclusion_of "$@" 2>/dev/null || true)
+    [[ -n "$c" && "$c" != null ]] && { echo "$c"; return; }
+    sleep 5
+  done
+}
+# run_log RUN prints the run's full log without CRs. Read it into a variable, then grep:
+# grep -q straight off gh's pipe SIGPIPEs gh, and pipefail turns a match into a failure.
+run_log() { gh run view "$1" -R "$REPO" --log 2>/dev/null | tr -d '\r' || true; }
 step_conclusion() {
   gh api "repos/$REPO/actions/runs/$1/jobs" \
     --jq ".jobs[].steps[]? | select(.name == \"$2\") | .conclusion" | head -n1
@@ -328,12 +341,19 @@ record M1E_EXPO_ACCOUNT "$EXPO_ACCOUNT"
 if has_secret EXPO_TOKEN && ! confirm "$REPO already has EXPO_TOKEN. Replace it?"; then
   note "keeping the existing EXPO_TOKEN"
 else
+  OWNER=$(node -p 'try { require("./app.json").expo.owner ?? "" } catch { "" }' 2>/dev/null || true)
   open_url "https://expo.dev/settings/access-tokens"
   step "Click 'Create token', name it rnship-fixture-ci, and copy the token."
+  [[ -n "$OWNER" ]] && warn "Create it under the Expo account that owns the project: $OWNER." \
+    && note "A robot token from another account can't read the project (E2 failed this way once)."
   note "It can publish production updates too (D1), so it goes only into the push-to-main job."
   ask_secret EXPO_TOKEN "Paste the token:"
   [[ -n "$EXPO_TOKEN" ]] || fail "no token"
   EXPO_TOKEN=$EXPO_TOKEN $EAS whoami >/dev/null 2>&1 || fail "that token doesn't authenticate"
+  if [[ -n "$(node -p 'try { require("./app.json").expo.extra?.eas?.projectId ?? "" } catch { "" }' 2>/dev/null)" ]]; then
+    EXPO_TOKEN=$EXPO_TOKEN $EAS project:info --non-interactive >/dev/null 2>&1 \
+      || fail "that token can't read this project${OWNER:+ (owner $OWNER)}: create it under that account"
+  fi
   set_secret EXPO_TOKEN "$EXPO_TOKEN"
   EXPO_TOKEN=""
 fi
@@ -437,8 +457,10 @@ RUN=$(wait_run "$YOUR_SHA" push)
 [[ -n "$RUN" ]] || fail "no completed run after 15 min: https://github.com/$REPO/actions"
 show_jobs "$RUN"
 record M1E_E2_RUN "https://github.com/$REPO/actions/runs/$RUN"
-record M1E_E2_STAGING_ON_YOUR_PUSH "$(conclusion_of "$RUN" staging-ota)"
-record M1E_E2_UPDATE_GROUP "$(gh run view "$RUN" -R "$REPO" --log 2>/dev/null | sed -n 's/.*update group \([^ ]*\) from.*/\1/p' | head -n1)"
+record M1E_E2_STAGING_ON_YOUR_PUSH "$(wait_job "$RUN" staging-ota)"
+# The log echoes the step's script too, so only a real UUID counts as the group id.
+LOG=$(run_log "$RUN")
+record M1E_E2_UPDATE_GROUP "$(sed -nE 's/.*update group ([0-9a-f-]{36}) from.*/\1/p' <<<"$LOG" | head -n1)"
 record M1E_E3_SENTRY_UPLOAD "$(step_conclusion "$RUN" 'Upload source maps to Sentry')"
 note "Wanted: staging success, an update group id, Sentry upload success."
 pause
@@ -462,9 +484,11 @@ RUN=$(wait_run "$PR_SHA" pull_request)
 [[ -n "$RUN" ]] || fail "no completed PR run after 15 min"
 show_jobs "$RUN"
 record M1E_E4_RUN "https://github.com/$REPO/actions/runs/$RUN"
-record M1E_E4_PR_CHECKS "$(conclusion_of "$RUN" pr-checks)"
-record M1E_E4_EXPO_TOKEN_ABSENT "$(gh run view "$RUN" -R "$REPO" --log 2>/dev/null | grep -q 'EXPO_TOKEN is absent' && echo yes || echo no)"
-record M1E_E4_STAGING_ON_PR "$(conclusion_of "$RUN" staging-ota)"
+record M1E_E4_PR_CHECKS "$(wait_job "$RUN" pr-checks)"
+# Match the step's output line ("…Z EXPO_TOKEN is absent"), not its echoed script.
+LOG=$(run_log "$RUN")
+record M1E_E4_EXPO_TOKEN_ABSENT "$(grep -qE 'Z EXPO_TOKEN is absent$' <<<"$LOG" && echo yes || echo no)"
+record M1E_E4_STAGING_ON_PR "$(wait_job "$RUN" staging-ota)"
 gh pr close "$PR_N" -R "$REPO" --delete-branch -c "M1 (e) check done." >/dev/null || true
 note "Wanted: pr-checks success, EXPO_TOKEN absent yes, staging skipped. PR closed again."
 pause
@@ -484,12 +508,12 @@ RUN=$(wait_run "$BOT_SHA" push)
 show_jobs "$RUN"
 record M1E_E5_RUN "https://github.com/$REPO/actions/runs/$RUN"
 record M1E_E5_ACTOR "$(gh api "repos/$REPO/actions/runs/$RUN" --jq .actor.login)"
-record M1E_E5_STAGING_ON_APP_PUSH "$(conclusion_of "$RUN" staging-ota)"
+record M1E_E5_STAGING_ON_APP_PUSH "$(wait_job "$RUN" staging-ota)"
 note "re-running it as you…"
 gh run rerun "$RUN" -R "$REPO" >/dev/null
 RUN2=$(wait_run "$BOT_SHA" push 2)
 [[ -n "$RUN2" ]] || fail "the re-run didn't complete"
-record M1E_E6_STAGING_ON_YOUR_RERUN "$(conclusion_of "$RUN2" staging-ota 2)"
+record M1E_E6_STAGING_ON_YOUR_RERUN "$(wait_job "$RUN2" staging-ota 2)"
 git -C "$WORK" pull -q --ff-only origin main || true
 
 say ""
