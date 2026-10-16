@@ -1,4 +1,5 @@
-import { isAbsolute, matchesGlob, relative } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, isAbsolute, join, matchesGlob, relative, resolve } from 'node:path';
 import { globToRegExp } from './changes.ts';
 import { PROTECTED_PATHS } from './compile.ts';
 import type { Policy, Rule } from './schema.ts';
@@ -85,7 +86,7 @@ function writtenPaths(command: SimpleCommand): string[] {
 function evaluateWrite(policy: Policy, path: string, cwd: string): HookDecision {
   const candidates = pathCandidates(path, cwd);
   for (const glob of PROTECTED_PATHS) {
-    if (candidates.some((p) => matchesGlob(p, glob) || matchesGlob(p, `**/${glob}`))) {
+    if (candidates.some((p) => matchesAnywhere(p, glob))) {
       return {
         block: true,
         ruleId: PROTECTED,
@@ -103,22 +104,38 @@ function evaluateRead(policy: Policy, path: string, cwd: string): HookDecision {
 function fileRule(policy: Policy, candidates: string[], path: string, applies: (rule: Rule) => boolean): HookDecision {
   for (const rule of policy.rules) {
     if (rule.effect === 'allow' || !applies(rule)) continue;
-    const glob = rule.match.files.find((g) => candidates.some((p) => matchesGlob(p, g) || matchesGlob(p, `**/${g}`)));
+    const glob = rule.match.files.find((g) => candidates.some((p) => matchesAnywhere(p, g)));
     if (glob) return blocked(rule, `${path} matches \`${glob}\``);
   }
   return ALLOW;
 }
 
 // The path as given, and relative to the session's working directory when it is inside it.
+// A path inside the project is matched only in its project-relative form, so where the
+// project itself lives never matters: the orchestrator's worktrees sit under ~/.rnship/,
+// and matching their absolute paths blocked every write (M3). A path outside the project
+// is matched absolute, so ~/.claude/** stays protected.
 function pathCandidates(path: string, cwd: string): string[] {
-  const out = [path];
-  if (isAbsolute(path)) {
-    const rel = relative(cwd, path);
-    if (!rel.startsWith('..') && !isAbsolute(rel)) out.push(rel);
-  } else if (path.startsWith('./')) {
-    out.push(path.slice(2));
+  const absolute = resolve(cwd, path);
+  const rel = relative(projectRoot(cwd), absolute);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) ? [rel] : [absolute];
+}
+
+/**
+ * The glob matches the path or any of its trailing segments. Not `**\/glob`: `**` never
+ * crosses a dot directory, so `**\/.claude/**` misses /Users/a/.rnship/x/.claude/settings.json.
+ */
+function matchesAnywhere(path: string, glob: string): boolean {
+  const segments = path.split('/');
+  return segments.some((_, i) => matchesGlob(segments.slice(i).join('/'), glob));
+}
+
+/** The nearest directory at or above cwd holding `.git` (a file in a worktree), else cwd. */
+function projectRoot(cwd: string): string {
+  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
+    if (existsSync(join(dir, '.git'))) return dir;
+    if (dir === dirname(dir)) return resolve(cwd);
   }
-  return out;
 }
 
 function blocked(rule: Rule, what: string): HookDecision {

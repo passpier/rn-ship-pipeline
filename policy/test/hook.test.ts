@@ -85,6 +85,17 @@ describe('evaluateToolCall', () => {
     expect(bash('mkdir -p .rnship/state')).toMatchObject({ block: true, ruleId: 'protected_path' });
   });
 
+  it("ignores protected names in the project's own location, but not inside it or outside it", () => {
+    const wt = '/Users/rnship-agent/.rnship/worktrees/run-1';
+    const at = (file_path: string, tool_name = 'Edit') => evaluateToolCall(policy, { tool_name, tool_input: { file_path }, cwd: wt });
+    expect(at(`${wt}/src/Counter.tsx`, 'Write')).toEqual({ block: false });
+    expect(evaluateToolCall(policy, { tool_name: 'Bash', tool_input: { command: 'touch src/a.ts' }, cwd: wt })).toEqual({ block: false });
+    expect(at(`${wt}/.rnship/policy.yaml`)).toMatchObject({ block: true, ruleId: 'protected_path' });
+    expect(at(`${wt}/../run-2/.claude/settings.json`)).toMatchObject({ block: true, ruleId: 'protected_path' });
+    expect(at('/Users/rnship-agent/.claude/settings.json', 'Write')).toMatchObject({ block: true, ruleId: 'protected_path' });
+    expect(evaluateToolCall(policy, { tool_name: 'Bash', tool_input: { command: 'cp x ../../.claude/settings.json' }, cwd: wt })).toMatchObject({ block: true });
+  });
+
   it('blocks edits to gated files and reads of signing material', () => {
     expect(edit('/work/app/store/products.yaml')).toMatchObject({ block: true, ruleId: 'iap.pricing' });
     expect(edit('/work/app/.env.local')).toMatchObject({ block: true, ruleId: 'keys.signing' });
