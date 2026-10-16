@@ -65,11 +65,11 @@ The output is `{ ios, android, reasons[], gates[], base_build_id, fingerprints }
 Recommended runtime policy: `runtimeVersion: { policy: "fingerprint" }`.
 
 ## Orchestrator (`rnship tick`)
-The orchestrator owns all state in one SQLite file (`$RNSHIP_DB`, default `~/.rnship/orchestrator.db`, owned by `rnship-agent`). Executors are stateless adapters behind one interface. It's an M2 preview: only the `fake` executor ships so far.
+The orchestrator owns all state in one SQLite file (`$RNSHIP_DB`, default `~/.rnship/orchestrator.db`, owned by `rnship-agent`). Executors are stateless adapters behind one interface: `fake` for simulations, and `ralphex` (pinned v1.7.0; see `docs/spikes/S8.md`). Live runs on Pro come with M3.
 
 ```sh
 rnship tasks import tasks.yaml --app <name> --flow A --repo <app-repo>   # idempotent
-rnship tick --executor fake --fake-script <json>                          # one pass; the LaunchAgent runs it every 15 min
+rnship tick --executor ralphex --settings <executor-settings.json>        # one pass; the LaunchAgent runs it every 15 min
 rnship tasks list
 rnship task approve <task-id> <head-sha>                                  # run as you: approves gated changes at exactly that commit
 ```
@@ -80,6 +80,8 @@ Each tick runs these steps:
 3. Leases a batch of same-tier tasks into a per-run worktree on `agent/run-<id>`, and runs the executor.
 4. Re-runs each task's validation commands under the validation sandbox.
 5. Diff-checks the result with `rnship policy check`.
+
+With ralphex, `claude_command` is `orchestrator/bin/claude-shim.ts`. The shim stops any session whose `system/init` doesn't list the guard plugin, and keeps the stream-json transcripts, which carry usage, denials, and reset times.
 
 Retries follow the failure class: a validation failure retries at the same tier, then one tier up (`policy/routing.yaml`), then goes to you. A gated change waits for `rnship task approve`, and a new commit invalidates that approval.
 

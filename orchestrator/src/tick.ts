@@ -247,13 +247,20 @@ async function runBatch(ctx: Ctx, batch: TaskRow[]): Promise<BatchReport> {
   }
   recordUsage(ctx.db, { modelId: result.modelId ?? model.id, usage: result.usage, detail: { tasks: report.taskKeys, phase: first.phase, status: result.status } }, ctx.now());
 
-  const completed = new Set(result.completedTaskIds);
+  // A crashed run leaves the worktree in an unknown state (or, with plugin_missing, holds
+  // work from a session without the guard): none of its tasks count, and the reset below
+  // goes all the way back to where the batch started.
+  const crashed = result.status === 'crashed';
+  const completed = new Set(crashed ? [] : result.completedTaskIds);
   const finished = tasks.filter((t) => completed.has(t.id));
   const unfinished = tasks.filter((t) => !completed.has(t.id));
   if (unfinished.length > 0) {
     // A "passed" run that left tasks unfinished is an executor bug: treat it as a crash.
     const status = result.status === 'passed' ? 'crashed' : result.status;
-    resetWorktree(worktree, { patchPath: join(bundleDir(ctx, unfinished[0]!), `attempt-${attempt}-${Date.now()}.patch`) });
+    resetWorktree(worktree, {
+      sha: crashed ? startSha : undefined,
+      patchPath: join(bundleDir(ctx, unfinished[0]!), `attempt-${attempt}-${Date.now()}.patch`),
+    });
     let resetAt: string | undefined;
     if (status === 'quota_exhausted') {
       const kind = result.limitKind ?? 'unknown';

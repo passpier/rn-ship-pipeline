@@ -45,7 +45,9 @@ const USAGE = `usage:
   rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]
   rnship tasks import <tasks.yaml> --app <name> --flow <A|B> --repo <app-repo> [--db <path>]
   rnship tasks list [--db <path>]
-  rnship tick [--db <path>] [--home <dir>] --executor fake --fake-script <json> [--batch <n>]
+  rnship tick [--db <path>] [--home <dir>] [--batch <n>] --executor fake --fake-script <json>
+  rnship tick [--db <path>] [--home <dir>] [--batch <n>] --executor ralphex --settings <executor-settings.json>
+              [--ralphex <bin>] [--review]
       one idempotent orchestrator pass (run by the LaunchAgent); the DB defaults to $RNSHIP_DB
       or ~/.rnship/orchestrator.db, and worktrees and bundles go next to it
   rnship task approve <task-id> <head-sha> [--db <path>]
@@ -106,6 +108,9 @@ async function main(argv: string[]): Promise<void> {
       executor: { type: 'string' },
       'fake-script': { type: 'string' },
       batch: { type: 'string' },
+      ralphex: { type: 'string' },
+      settings: { type: 'string' },
+      review: { type: 'boolean' },
     },
   });
 
@@ -211,14 +216,21 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'tick': {
       const path = dbPath(values.db);
+      const home = orchestratorHome(path, values.home);
       const report = await tick({
         db: openDb(path),
-        executor: makeExecutor(values.executor, { fakeScript: values['fake-script'] }),
+        executor: makeExecutor(values.executor, {
+          fakeScript: values['fake-script'],
+          ralphex: values.ralphex,
+          settings: values.settings,
+          review: values.review,
+          home,
+        }),
         routing: loadRouting(),
         diffCheck: policyDiffCheck,
         validate: sandboxValidate,
         notify: desktopNotify,
-        home: orchestratorHome(path, values.home),
+        home,
         batchSize: values.batch === undefined ? undefined : Number(values.batch),
       });
       console.log(JSON.stringify(report, null, 2));

@@ -1,7 +1,19 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { FakeExecutor, getRun, getTask, approvalSubject, desktopNotify, openDb, type DiffCheck, type Executor, type Validate } from '@rnship/orchestrator';
+import { fileURLToPath } from 'node:url';
+import {
+  approvalSubject,
+  desktopNotify,
+  FakeExecutor,
+  getRun,
+  getTask,
+  openDb,
+  RalphexExecutor,
+  type DiffCheck,
+  type Executor,
+  type Validate,
+} from '@rnship/orchestrator';
 import { loadBasePolicy, loadPolicy, mergePolicy } from '@rnship/policy';
 import { ApprovalError, stateDir, writeApproval } from '@rnship/release';
 import { policyCheck } from './check.ts';
@@ -45,12 +57,28 @@ export const sandboxValidate: Validate = async ({ cwd, commands }) => {
   return { ok: true };
 };
 
-export function makeExecutor(kind: string | undefined, opts: { fakeScript?: string }): Executor {
+const GUARD_PLUGIN_DIR = fileURLToPath(new URL('../../plugin', import.meta.url));
+
+export function makeExecutor(
+  kind: string | undefined,
+  opts: { fakeScript?: string; ralphex?: string; settings?: string; review?: boolean; home: string },
+): Executor {
   if (kind === 'fake') {
     if (!opts.fakeScript) throw new Error('--executor fake needs --fake-script <json>');
     return FakeExecutor.fromFile(opts.fakeScript);
   }
-  throw new Error(`unknown executor: ${kind ?? '(none)'}; use --executor fake`);
+  if (kind === 'ralphex') {
+    // The settings file must be the compiled executor-settings.json (ADR 0002).
+    if (!opts.settings) throw new Error('--executor ralphex needs --settings <executor-settings.json>');
+    return new RalphexExecutor({
+      ralphex: opts.ralphex ?? 'ralphex',
+      pluginDir: GUARD_PLUGIN_DIR,
+      settingsFile: opts.settings,
+      workDir: join(opts.home, 'ralphex'),
+      review: opts.review,
+    });
+  }
+  throw new Error(`unknown executor: ${kind ?? '(none)'}; use --executor fake or ralphex`);
 }
 
 export { desktopNotify };
