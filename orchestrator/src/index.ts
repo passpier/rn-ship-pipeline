@@ -12,5 +12,5 @@ export { importTasks, loadTasks, parseTasks, TasksFileSchema, type ImportResult,
 export { approvalSubject, tick, type BatchReport, type DiffCheck, type Gate, type TickOptions, type TickReport, type Validate } from './tick.ts';
 export { ensureWorktree, git, headSha, resetWorktree } from './worktree.ts';
 export { classify, RalphexExecutor, ralphexArg, SHIM, type RalphexOptions } from './executors/ralphex.ts';
-export { completedTaskNumbers, renderPlan } from './plan.ts';
-export { checkInit, combine, limitKindOf, PLUGIN_MISSING, RALPHEX_ERROR_PATTERNS, RALPHEX_LIMIT_PATTERNS, summarize, type StreamSummary } from './streamJson.ts';
+export { completedTaskNumbers, renderPlan } from './executors/ralphexPlan.ts';
+export { checkInit, combine, limitKindOf, PLUGIN_MISSING, CLAUDE_ERROR_PATTERNS, CLAUDE_LIMIT_PATTERNS, summarize, type StreamSummary } from './streamJson.ts';

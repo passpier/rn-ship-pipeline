@@ -1,4 +1,4 @@
-import type { ExecRequest } from './executor.ts';
+import type { ExecRequest } from '../executor.ts';
 
 // A batch of tasks → a ralphex plan file (S8 X9). Task bodies and failure digests go inside
 // fenced blocks: ralphex's parser skips fenced code, so nothing in them can become a task

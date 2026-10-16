@@ -67,6 +67,13 @@ Recommended runtime policy: `runtimeVersion: { policy: "fingerprint" }`.
 ## Orchestrator (`rnship tick`)
 The orchestrator owns all state in one SQLite file (`$RNSHIP_DB`, default `~/.rnship/orchestrator.db`, owned by `rnship-agent`). Executors are stateless adapters behind one interface: `fake` for simulations, and `ralphex` (pinned v1.7.0; see `docs/spikes/S8.md`). Live runs on Pro come with M3.
 
+**ralphex is one adapter, not a dependency.** The Ralph loop (a fresh Claude session per task, repeated until validation passes) is the pattern. ralphex is the first runner wired to it, because S8 verified its internals. The orchestrator core (tick, states, ledger, retries, validation, diff check) never calls it. Everything specific to ralphex lives in `orchestrator/src/executors/` (`ralphex.ts`, `ralphexPlan.ts`). Another runner, such as ralph-orchestrator or plain `claude -p` (M3), can sit behind the same `Executor` interface if it:
+- runs headless and exits per batch, instead of sleeping on quota itself;
+- starts every Claude session through `orchestrator/bin/claude-shim.ts` (or an equivalent guard-plugin init check) with the ADR 0002 flags;
+- leaves stream-json transcripts, so the adapter can read usage, denials, and reset times.
+
+The orchestrator re-runs validation and `rnship policy check` itself, so it never trusts a runner's own checks. Today ralphex is the only live runner. Adding another one needs a new adapter and a spike like S8.
+
 ```sh
 rnship tasks import tasks.yaml --app <name> --flow A --repo <app-repo>   # idempotent
 rnship tick --executor ralphex --settings <executor-settings.json>        # one pass; the LaunchAgent runs it every 15 min
@@ -81,7 +88,7 @@ Each tick runs these steps:
 4. Re-runs each task's validation commands under the validation sandbox.
 5. Diff-checks the result with `rnship policy check`.
 
-With ralphex, `claude_command` is `orchestrator/bin/claude-shim.ts`. The shim stops any session whose `system/init` doesn't list the guard plugin, and keeps the stream-json transcripts, which carry usage, denials, and reset times.
+Every live executor starts Claude through `orchestrator/bin/claude-shim.ts` (with ralphex, as `claude_command`). The shim stops any session whose `system/init` doesn't list the guard plugin, and keeps the stream-json transcripts, which carry usage, denials, and reset times.
 
 Retries follow the failure class: a validation failure retries at the same tier, then one tier up (`policy/routing.yaml`), then goes to you. A gated change waits for `rnship task approve`, and a new commit invalidates that approval.
 

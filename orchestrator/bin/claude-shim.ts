@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// ralphex's `claude_command`. Runs the real claude ($RNSHIP_CLAUDE, default `claude`) with
-// the same argv and stdin, passes its stream-json through to ralphex, and keeps a copy in
-// $RNSHIP_TRANSCRIPTS. It fails closed on the first `system/init` event: if the guard
+// The claude command for any executor (ralphex: `claude_command`). Runs the real claude
+// ($RNSHIP_CLAUDE, default `claude`) with the same argv and stdin, passes its stream-json
+// through to the caller, and keeps a copy in $RNSHIP_TRANSCRIPTS. It fails closed on the first `system/init` event: if the guard
 // plugin ($RNSHIP_GUARD_PLUGIN, default `rnship`) isn't loaded or a plugin failed to load,
-// it kills claude before any tool call and prints PLUGIN_MISSING, which the adapter puts
-// in ralphex's `claude_error_patterns` (S2 T3f, S8).
+// it kills claude before any tool call and prints PLUGIN_MISSING, which the ralphex adapter
+// puts in `claude_error_patterns` (S2 T3f, S8).
 import { spawn } from 'node:child_process';
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';

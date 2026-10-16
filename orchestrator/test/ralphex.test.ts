@@ -8,7 +8,7 @@ import {
   classify,
   completedTaskNumbers,
   PLUGIN_MISSING,
-  RALPHEX_LIMIT_PATTERNS,
+  CLAUDE_LIMIT_PATTERNS,
   RalphexExecutor,
   ralphexArg,
   renderPlan,
@@ -73,7 +73,7 @@ describe('ralphex adapter config', () => {
 });
 
 describe('ralphex result mapping', () => {
-  const base = { exitCode: 1, aborted: false, timedOut: false, footer: undefined, summary: summarize(''), limitPatterns: RALPHEX_LIMIT_PATTERNS };
+  const base = { exitCode: 1, aborted: false, timedOut: false, footer: undefined, summary: summarize(''), limitPatterns: CLAUDE_LIMIT_PATTERNS };
 
   it('reads the outcome from the error line and progress footer, not the exit code (S8 X1)', () => {
     expect(classify({ ...base, exitCode: 0, output: 'done', footer: 'Completed: 2026-10-16 09:42:45 (0s)' })).toEqual({ status: 'passed' });

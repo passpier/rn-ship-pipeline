@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ModelSpec } from '@rnship/policy';
 import type { ExecRequest, ExecResult, Executor, ProbeResult } from '../executor.ts';
-import { completedTaskNumbers, renderPlan } from '../plan.ts';
-import { combine, limitKindOf, matchPattern, PLUGIN_MISSING, RALPHEX_ERROR_PATTERNS, RALPHEX_LIMIT_PATTERNS, summarize, type StreamSummary } from '../streamJson.ts';
+import { completedTaskNumbers, renderPlan } from './ralphexPlan.ts';
+import { combine, limitKindOf, matchPattern, PLUGIN_MISSING, CLAUDE_ERROR_PATTERNS, CLAUDE_LIMIT_PATTERNS, summarize, type StreamSummary } from '../streamJson.ts';
 
 // The ralphex adapter (pinned to v1.7.0; facts in docs/spikes/S8.md). Each run gets its
 // own config dir, so the app repo's `.ralphex/` never configures it, and the orchestrator
@@ -91,11 +91,11 @@ export class RalphexExecutor implements Executor {
   }
 
   limitPatterns(): string[] {
-    return [...RALPHEX_LIMIT_PATTERNS, ...(this.opts.extraLimitPatterns ?? [])];
+    return [...CLAUDE_LIMIT_PATTERNS, ...(this.opts.extraLimitPatterns ?? [])];
   }
 
   config(): string {
-    const errorPatterns = [...new Set([...RALPHEX_ERROR_PATTERNS, ...(this.opts.extraLimitPatterns ?? []), PLUGIN_MISSING])];
+    const errorPatterns = [...new Set([...CLAUDE_ERROR_PATTERNS, ...(this.opts.extraLimitPatterns ?? []), PLUGIN_MISSING])];
     return [
       `claude_command = ${SHIM}`,
       `claude_args = ${this.claudeArgs().map(ralphexArg).join(' ')}`,

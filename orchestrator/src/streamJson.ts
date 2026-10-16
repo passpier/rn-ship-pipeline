@@ -5,8 +5,8 @@ import type { LimitKind, Usage } from './executor.ts';
 // rate-limit event with its reset time. So the shim keeps a copy of every stream, and the
 // adapter reads it.
 
-/** ralphex v1.7.0's default `claude_limit_patterns` (S8 X3). Extend from S4's captures. */
-export const RALPHEX_LIMIT_PATTERNS = [
+/** Claude Code's limit messages, as listed in ralphex v1.7.0's default `claude_limit_patterns` (S8 X3). Extend from S4's captures. */
+export const CLAUDE_LIMIT_PATTERNS = [
   "You've hit your limit",
   "You've hit your session limit",
   "You've hit your weekly limit",
@@ -16,9 +16,9 @@ export const RALPHEX_LIMIT_PATTERNS = [
   "You've hit your individual spend limit",
 ];
 
-/** ralphex v1.7.0's default `claude_error_patterns`. */
-export const RALPHEX_ERROR_PATTERNS = [
-  ...RALPHEX_LIMIT_PATTERNS.slice(0, 3),
+/** Claude Code's error messages, as listed in ralphex v1.7.0's default `claude_error_patterns`. */
+export const CLAUDE_ERROR_PATTERNS = [
+  ...CLAUDE_LIMIT_PATTERNS.slice(0, 3),
   'API Error: 400',
   'API Error: 401',
   'API Error: 403',
@@ -28,10 +28,10 @@ export const RALPHEX_ERROR_PATTERNS = [
   'API Error: 500',
   'cannot be launched inside another Claude Code session',
   'Not logged in',
-  ...RALPHEX_LIMIT_PATTERNS.slice(4),
+  ...CLAUDE_LIMIT_PATTERNS.slice(4),
 ];
 
-/** What the shim prints when the guard plugin isn't loaded. It's an error pattern for ralphex. */
+/** What the shim prints when the guard plugin isn't loaded. The ralphex adapter makes it an error pattern. */
 export const PLUGIN_MISSING = 'RNSHIP: plugin_missing';
 
 export type InitEvent = { model?: string; plugins: string[]; pluginErrors: unknown[] };
@@ -120,7 +120,7 @@ export function summarize(text: string): StreamSummary {
   return summary;
 }
 
-/** Combines the summaries of several sessions (one per ralphex iteration). */
+/** Combines the summaries of several sessions (one per session or loop iteration). */
 export function combine(summaries: StreamSummary[]): StreamSummary {
   return {
     init: summaries.find((s) => s.init)?.init,
