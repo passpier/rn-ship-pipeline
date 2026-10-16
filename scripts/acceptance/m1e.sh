@@ -192,8 +192,8 @@ finish() {
 #   E4  a PR opened by the broker's App runs PR checks with EXPO_TOKEN absent
 #   E5  a push to main by the App skips the staging job (actor gate)
 #   E6  your re-run of that App push is skipped too (triggering_actor)
-# Run as YOUR macOS user, from a rn-ship-pipeline checkout of main with #22 and #23
-# merged. Results land in docs/spikes/M1e.results.env (gitignored). Secrets go only
+# Run as YOUR macOS user, from a rn-ship-pipeline checkout of main, pushed to origin.
+# Results land in docs/spikes/M1e.results.env (gitignored). Secrets go only
 # to GitHub Actions secrets, never to disk.
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -271,10 +271,10 @@ node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' || fa
 gh auth status >/dev/null 2>&1 || fail "gh isn't logged in: gh auth login"
 [[ "$(gh api user --jq .login)" == "$RELEASE_ACTOR" ]] || fail "gh must be logged in as $RELEASE_ACTOR"
 
-# The actor gate (#23) and the App token helper (#22) both have to be on main.
+# The actor gate has to be on origin/main, and the App token helper in this checkout.
 gh api "repos/$PIPELINE/contents/.github/workflows/release-staging-ota.yml?ref=main" --jq .content \
-  | base64 -d | grep -q 'release-actor' || fail "the actor gate isn't on main yet: merge #23 first"
-[[ -x "$TOKEN_SH" ]] || fail "no $TOKEN_SH: merge #22, then git switch main && git pull"
+  | base64 -d | grep -q 'release-actor' || fail "the actor gate isn't on origin/main: git push origin main"
+[[ -x "$TOKEN_SH" ]] || fail "no $TOKEN_SH: git switch main && git pull"
 [[ "$(gh repo view "$PIPELINE" --json visibility --jq .visibility)" == PUBLIC ]] \
   || fail "$PIPELINE is private: the fixture repo can't call its workflows"
 [[ "$(gh repo view "$REPO" --json visibility --jq .visibility)" == PRIVATE ]] || fail "$REPO should be private"

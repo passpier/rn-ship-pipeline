@@ -47,7 +47,7 @@ jobs:
 ```
 
 ## Status
-These workflows are written but not yet exercised. M1 acceptance (e) still has to be checked on the fixture repo, `passpier/rnship-s6-probe`. Run `scripts/acceptance/m1e.sh` as yourself after #22 and #23 are merged. It checks that:
+These workflows are written but not yet exercised. M1 acceptance (e) still has to be checked on the fixture repo, `passpier/rnship-s6-probe`. Run `scripts/acceptance/m1e.sh` as yourself, with main pushed to origin. It checks that:
 - the caller is pinned by SHA;
 - a staging OTA is published and its source maps are uploaded;
 - the job runs only on your push to `main`, and a push by the broker's App skips it;
