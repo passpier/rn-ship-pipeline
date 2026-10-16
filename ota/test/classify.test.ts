@@ -1,3 +1,6 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { classify } from '../src/index.ts';
 import { scenario } from './scenario.ts';
@@ -12,10 +15,24 @@ describe('classify', () => {
     expect(result).toMatchObject({ ios: 'OTA', android: 'OTA', reasons: [], base_build_id: 'fixture-build-1' });
   });
 
+  it("fingerprints with the app's own @expo/fingerprint, and needs a build when the build used another version", async () => {
+    const s = await scenario();
+    const buildJson = join(s.artifacts, 'build.json');
+    const fromExpo = createRequire(createRequire(join(s.base, 'package.json')).resolve('expo/package.json'));
+    const appVersion = (JSON.parse(readFileSync(fromExpo.resolve('@expo/fingerprint/package.json'), 'utf8')) as { version: string }).version;
+    expect(JSON.parse(readFileSync(buildJson, 'utf8'))).toMatchObject({ fingerprintVersion: appVersion });
+
+    writeFileSync(buildJson, JSON.stringify({ buildId: 'fixture-build-1', fingerprintVersion: '0.0.1' }));
+    const result = await classify({ base: s.base, artifacts: s.artifacts, candidate: s.candidate });
+
+    expect(result).toMatchObject({ ios: 'BUILD', android: 'BUILD' });
+    expect(result.reasons).toContainEqual(expect.objectContaining({ ruleId: 'fingerprint.version_changed' }));
+  });
+
   it('needs a store build and the permissions gate when expo-camera is added', async () => {
     const s = await scenario();
     s.installExtra('expo-camera');
-    s.edit('package.json', (text) => text.replace('"expo-status-bar"', '"expo-camera": "~57.0.6",\n    "expo-status-bar"'));
+    s.edit('package.json', (text) => text.replace('"expo-status-bar"', '"expo-camera": "~55.0.23",\n    "expo-status-bar"'));
     s.edit('app.config.js', (text) => text.replace('plugins: [withFixtureFlag]', "plugins: [withFixtureFlag, 'expo-camera']"));
 
     const result = await classify({ base: s.base, artifacts: s.artifacts, candidate: s.candidate });
@@ -96,7 +113,7 @@ describe('classify', () => {
 
   it('needs a store build when a patch touches a package that ships native code', async () => {
     const s = await scenario();
-    s.write('patches/expo-updates+57.0.26.patch', 'diff --git a/node_modules/expo-updates/ios/EXUpdates/AppController.swift b/node_modules/expo-updates/ios/EXUpdates/AppController.swift\n');
+    s.write('patches/expo-updates+55.0.30.patch', 'diff --git a/node_modules/expo-updates/ios/EXUpdates/AppController.swift b/node_modules/expo-updates/ios/EXUpdates/AppController.swift\n');
 
     const result = await classify({ base: s.base, artifacts: s.artifacts, candidate: s.candidate });
 

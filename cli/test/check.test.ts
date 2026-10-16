@@ -20,7 +20,7 @@ async function repo(opts: { approve: boolean }) {
   const state = loadProjectState(root);
   const baseline = {
     version: 1,
-    dependencies: { ...state.dependencies, 'expo-camera': '~57.0.6' },
+    dependencies: { ...state.dependencies, 'expo-camera': '~55.0.23' },
     config: JSON.parse(JSON.stringify(state.config)),
   };
   mkdirSync(join(root, '.rnship'), { recursive: true });
@@ -58,7 +58,7 @@ describe('rnship policy check', () => {
 
   it('passes a change that adds a dependency the baseline allowlists', async () => {
     const r = await repo({ approve: true });
-    r.addDep('expo-camera', '~57.0.6');
+    r.addDep('expo-camera', '~55.0.23');
 
     expect(r.check()).toMatchObject({ ok: true, gates: [] });
   });
@@ -79,7 +79,7 @@ describe('rnship policy check', () => {
 
   it('fires deps and config rules on contact when the baseline is not approved', async () => {
     const r = await repo({ approve: false });
-    r.addDep('expo-camera', '~57.0.6');
+    r.addDep('expo-camera', '~55.0.23');
 
     const result = r.check();
 

@@ -4,10 +4,10 @@
   "private": true,
   "main": "index.js",
   "dependencies": {
-    "expo": "~57.0.28",
-    "expo-status-bar": "~57.0.1",
-    "expo-updates": "~57.0.26",
-    "react": "19.2.3",
-    "react-native": "0.86.3"
+    "expo": "~55.0.31",
+    "expo-status-bar": "~55.0.6",
+    "expo-updates": "~55.0.30",
+    "react": "19.2.0",
+    "react-native": "0.83.10"
   }
 }

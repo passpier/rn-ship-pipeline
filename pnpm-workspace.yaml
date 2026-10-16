@@ -7,3 +7,6 @@ packages:
   - orchestrator
   - fixtures/app
   - fixtures/extras
+overrides:
+  # expo 55 lists it as a '*' optional peer, which resolves to SDK 57's 57.x; @expo/log-box 55 needs ^55.
+  '@expo/dom-webview': ~55.0.6

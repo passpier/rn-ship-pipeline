@@ -1,6 +1,6 @@
-import { diffFingerprints } from '@expo/fingerprint';
 import { changedGates, loadBasePolicy, type Gate, type Policy } from '@rnship/policy';
 import { fingerprintFor, PLATFORMS, readBuild, type Platform } from './artifacts.ts';
+import { appFingerprint, type FingerprintModule } from './fingerprint.ts';
 import { GAP_RULES } from './gaps.ts';
 import { loadProjectState } from './project.ts';
 import { STORE_RULES } from './storePolicy.ts';
@@ -31,13 +31,23 @@ export async function classify(input: ClassifyInput): Promise<Classification> {
   const build = readBuild(input.artifacts);
   const reasons: Reason[] = [];
   const fingerprints = {} as Classification['fingerprints'];
+  const fingerprint = appFingerprint(input.candidate);
+  if (build.fingerprintVersion && build.fingerprintVersion !== fingerprint.version) {
+    // Different @expo/fingerprint versions hash differently: nothing to compare, so BUILD.
+    reasons.push({
+      ruleId: 'fingerprint.version_changed',
+      platforms: [...PLATFORMS],
+      verdict: 'BUILD',
+      detail: `@expo/fingerprint ${build.fingerprintVersion} made the build's fingerprint; the candidate has ${fingerprint.version}`,
+    });
+  }
 
   for (const platform of PLATFORMS) {
     const candidate = await fingerprintFor(input.candidate, platform);
     const base = build.fingerprints[platform];
     fingerprints[platform] = { base: base.hash, candidate: candidate.hash };
     if (base.hash !== candidate.hash) {
-      const changed = diffFingerprints(base, candidate).map(describeDiff);
+      const changed = fingerprint.diffFingerprints(base, candidate).map(describeDiff);
       reasons.push({ ruleId: 'fingerprint.changed', platforms: [platform], verdict: 'BUILD', detail: changed.join(', ') });
     }
   }
@@ -66,7 +76,7 @@ function verdicts(reasons: Reason[]): Record<Platform, Verdict> {
   return out;
 }
 
-function describeDiff(item: ReturnType<typeof diffFingerprints>[number]): string {
+function describeDiff(item: ReturnType<FingerprintModule['diffFingerprints']>[number]): string {
   const source = item.op === 'added' ? item.addedSource : item.op === 'removed' ? item.removedSource : item.afterSource;
   return `${item.op} ${source.type === 'contents' ? source.id : source.filePath}`;
 }

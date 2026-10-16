@@ -4,9 +4,9 @@
   "private": true,
   "description": "Native packages that test scenarios add to a copy of fixtures/app. Never linked into the base app.",
   "dependencies": {
-    "expo": "~57.0.28",
-    "expo-camera": "~57.0.6",
-    "react": "19.2.3",
-    "react-native": "0.86.3"
+    "expo": "~55.0.31",
+    "expo-camera": "~55.0.23",
+    "react": "19.2.0",
+    "react-native": "0.83.10"
   }
 }
