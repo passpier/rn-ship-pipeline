@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { compilePolicy, loadBasePolicy } from '@rnship/policy';
 import { describe, expect, it } from 'vitest';
 import { ClaudePExecutor, renderTaskPrompt, signalOf, SIGNALS, type ExecRequest } from '../src/index.ts';
 import { gitIn, harness } from './harness.ts';
@@ -11,12 +12,12 @@ const PLUGIN = fileURLToPath(new URL('../../plugin', import.meta.url));
 
 const task = (id: number, key: string, extra: Partial<ExecRequest['tasks'][number]> = {}) => ({ id, key, title: `Task ${key}`, body: '', validation: ['pnpm test'], ...extra });
 
-function claudeP(stub: object, opts: { review?: boolean; maxTurns?: number } = {}) {
+function claudeP(stub: object, { settings = {}, ...opts }: { review?: boolean; maxTurns?: number; settings?: object } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'rnship-claude-p-'));
   const scenario = join(dir, 'scenario.json');
   writeFileSync(scenario, JSON.stringify(stub));
   const settingsFile = join(dir, 'executor-settings.json');
-  writeFileSync(settingsFile, '{}\n');
+  writeFileSync(settingsFile, JSON.stringify(settings) + '\n');
   return new ClaudePExecutor({ claude: STUB, pluginDir: PLUGIN, settingsFile, workDir: join(dir, 'work'), env: { STUB_SCENARIO: scenario }, ...opts });
 }
 
@@ -191,6 +192,30 @@ describe('claude-p adapter against stub claude', () => {
     const result = await claudeP({ calls: ['denied'] }).run(direct(h)([task(1, 'a')]), AbortSignal.timeout(60_000));
     expect(result.status).toBe('passed');
     expect(result.deniedToolCalls).toEqual([{ tool_name: 'Bash', tool_input: { command: 'npm install left-pad' } }]);
+  });
+
+  it('can write and run commands under dontAsk with the compiled executor settings', async () => {
+    const h = harness();
+    const settings = compilePolicy(loadBasePolicy(), { hookRulesPath: '/etc/rnship/hook-rules.json' }).executorSettings!;
+    h.executor = claudeP({ permissions: 'enforce' }, { settings }) as never;
+    h.importTasks([{ id: 'a' }]);
+
+    await h.tick();
+
+    expect(h.task('a').state).toBe('done');
+  });
+
+  it('hands a session denied by dontAsk to you at once, as in M3 (2026-10-16)', async () => {
+    const h = harness();
+    const compiled = compilePolicy(loadBasePolicy(), { hookRulesPath: '/etc/rnship/hook-rules.json' }).executorSettings!;
+    h.executor = claudeP({ permissions: 'enforce' }, { settings: { ...compiled, permissions: { ...compiled.permissions, allow: [] } } }) as never;
+    h.importTasks([{ id: 'a', tier: 'T1' }]);
+
+    await h.tick();
+
+    expect(h.task('a')).toMatchObject({ state: 'needs_human', tier: 'T1', failure_class: 'denied' });
+    expect(h.task('a').failure_digest).toMatch(/^denied: Edit\(\.\/\*\*\), Bash\(git commit\)\n/);
+    expect(h.db.prepare('SELECT count(*) AS n FROM ledger').get()).toEqual({ n: 1 });
   });
 
   it('runs the review pass as one more session', async () => {

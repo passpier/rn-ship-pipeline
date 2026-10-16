@@ -216,7 +216,14 @@ PLAN_KEYS=(counter haptics format)
 trap 'warn "stopped at line $LINENO. Fix the cause and re-run; finished stages are safe to repeat."' ERR
 
 record() { write_env "$1" "$2"; }
-fail() { warn "$1"; exit 1; }
+UNATTENDED=no
+# notify MSG rings the terminal and posts a macOS notification, for when you've walked away.
+notify() {
+  printf '\a'
+  osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "rnship M3"' -e 'end run' "$1" \
+    >/dev/null 2>&1 || true
+}
+fail() { warn "$1"; [[ $UNATTENDED == yes ]] && notify "Stopped: $1"; exit 1; }
 s0_value() { sed -n "s/^$1=//p" "$S0_RESULTS" | tail -n1; }
 rnship() { node "$ROOT/cli/src/main.ts" "$@"; } # yours, for the baseline approval
 
@@ -342,6 +349,10 @@ for c in gh jq git node npx curl shasum sudo; do command -v "$c" >/dev/null || f
 node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' || fail "need Node 24 (nvm use 24)"
 say "sudo runs every step as $AGENT; enter your password once."
 sudo -v
+# The runs take hours and sudo forgets you after a few minutes, so keep it fresh until exit.
+while sleep 60; do sudo -n true 2>/dev/null || exit; done &
+SUDO_KEEPALIVE=$!
+trap 'kill "$SUDO_KEEPALIVE" 2>/dev/null || true' EXIT
 AGENT_UID=$(id -u "$AGENT" 2>/dev/null) || fail "no $AGENT user: run scripts/spikes/s0-identity.sh first"
 [[ -f "$S0_RESULTS" && "$(s0_value S0_CLAUDE_P_OK)" == yes ]] || fail "S0 never got claude -p working as $AGENT"
 sudo test -x "$AGENT_HOME/.local/bin/claude" || fail "no claude for $AGENT (S0 stage 2)"
@@ -358,7 +369,8 @@ mkdir -p "$STATE" && chmod 755 "$STATE"
 [[ "$(stat -f %Su "$STATE")" == "$(id -un)" ]] || fail "$STATE must be owned by you"
 record M3_RNSHIP_SHA "$RNSHIP_SHA"
 say "The agent will run rn-ship-pipeline@${RNSHIP_SHA:0:12} on Pro."
-note "It makes real claude -p calls: about 8 Sonnet sessions per adapter, in one sitting."
+note "It makes real claude -p calls: one short Haiku preflight, then about 8 Sonnet sessions per adapter."
+note "After the preflight (stage 7) both runs go unattended, one after the other, up to the summary."
 pause
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
@@ -562,7 +574,58 @@ say "Wrote $SHARED/plan.yaml, gate.yaml and m3-run.sh (yours; $AGENT can read, n
 note "Tier T1 = $(sed -nE 's/^ *T1: *\{ *id: *([a-z0-9-]+).*/\1/p' "$ROOT/policy/routing.yaml") (policy/routing.yaml)."
 pause
 
-# ── 7, 8 ──────────────────────────────────────────────────────────────────
+# ── 7 ─────────────────────────────────────────────────────────────────────
+# Every layer (dontAsk, allow/deny/ask, guard, Bash sandbox) is tested alone against a stub;
+# this is the first time they meet a real claude together. One Haiku session with the
+# executors' exact flags and settings must write in its worktree, edit a file outside it
+# that --allowedTools names (as ralphex's plan), run Bash, and be refused eas submit
+# (a fake eas from S2 is first on PATH). The second M3 attempt (2026-10-16) would have
+# stopped here: dontAsk with no allow rules denied every write.
+stage "Permission preflight (one Haiku session)"
+PRE=$AGENT_HOME/.rnship/m3-preflight
+cat > "$SHARED/m3-preflight.sh" <<RUN
+#!/bin/sh
+# m3-preflight.sh: one claude -p session with the executor flags, as $AGENT in its GUI session.
+set -u
+export PATH="$AGENT_RNSHIP/scripts/spikes/s2/bin:$AGENT_PATH"
+dir="$PRE"
+rm -rf "\$dir" && mkdir -p "\$dir/plan" || exit 1
+git clone -q "$BUNDLE" "\$dir/wt" || exit 1
+printf -- '- [ ] preflight\\n' > "\$dir/plan/plan.md"
+export S2_CALLS="\$dir/wt/eas-calls.log"
+cd "\$dir/wt" || exit 1
+claude -p "This is a permissions check, not a coding task. Do each step with the tool named, in order, even if an earlier one fails. Then reply with one line per step: its number and ok, or the exact error.
+1. Write: create preflight.txt in the current directory containing ok.
+2. Read, then Edit: in \$dir/plan/plan.md replace '- [ ]' with '- [x]'.
+3. Bash: echo ok > bash-ok.txt
+4. Bash: eas submit --platform ios --non-interactive" \\
+  --model claude-haiku-5-5 --max-turns 12 --output-format stream-json --verbose \\
+  --permission-mode dontAsk --plugin-dir "$AGENT_RNSHIP/plugin" \\
+  --settings "$SHARED/build/executor-settings.json" --setting-sources user \\
+  --allowedTools "Read(/\$dir/plan/plan.md),Edit(/\$dir/plan/plan.md)" \\
+  < /dev/null > "\$dir/transcript.jsonl"
+echo "claude exit=\$?"
+RUN
+chmod 755 "$SHARED/m3-preflight.sh"
+note "Same flags as claudeArgs() in orchestrator/src/executors/claudeSession.ts; the settings from stage 5."
+run_in_agent_session preflight 600 claude-p /bin/sh "$SHARED/m3-preflight.sh" || fail "the preflight didn't finish: see $SHARED/preflight.log"
+pre_has() { as_agent test -e "$PRE/$1" && echo yes || echo no; }
+PRE_PLUGIN=$(as_agent /bin/cat "$PRE/transcript.jsonl" | jq -rs 'map(select(.type == "system" and .subtype == "init"))[0].plugins // [] | map(.name) | if index("rnship") then "yes" else "no" end')
+PRE_PLAN=$(as_agent /usr/bin/grep -q -- '- \[x\]' "$PRE/plan/plan.md" && echo yes || echo no)
+PRE_EAS_BLOCKED=$([[ "$(pre_has wt/eas-calls.log)" == no ]] && echo yes || echo no)
+PRE_RESULT="guard:$PRE_PLUGIN,write:$(pre_has wt/preflight.txt),plan:$PRE_PLAN,bash:$(pre_has wt/bash-ok.txt),eas_blocked:$PRE_EAS_BLOCKED"
+record M3_PREFLIGHT "$PRE_RESULT"
+record M3_PREFLIGHT_DENIALS "$(as_agent /bin/cat "$PRE/transcript.jsonl" | jq -rs 'map(select(.type == "result"))[-1].permission_denials // [] | map("\(.tool_name)(\(.tool_input.command // .tool_input.file_path // ""))") | join(", ")')"
+note "Wanted: guard:yes,write:yes,plan:yes,bash:yes,eas_blocked:yes (denials: only eas submit, if any)."
+[[ "$PRE_RESULT" == "guard:yes,write:yes,plan:yes,bash:yes,eas_blocked:yes" ]] \
+  || fail "preflight: $PRE_RESULT. Read $PRE/transcript.jsonl (sudo) before spending Sonnet."
+say "The layers let real work through and still stop eas submit."
+say ""
+say "Next, both adapters run unattended (hours at most). You can walk away; it ends on the summary."
+pause "Press Enter to start the runs"
+
+# ── 8, 9 ──────────────────────────────────────────────────────────────────
+UNATTENDED=yes
 for a in "${ADAPTERS[@]}"; do
   stage "$a: the plan, then the gated task"
   say "Plan: counter → haptics → format. Then share, which must wait for your approval."
@@ -579,20 +642,23 @@ for a in "${ADAPTERS[@]}"; do
   report "$a" "$PLAN_SECS"
   say ""
   grep "^M3_$(key_var "$a")_" "$ENV_FILE" | sed 's/^/    /'
-  note "Wanted: plan all done · QUOTA_PARKED no · ALLOWLISTED_GATED no · GATE_STATE awaiting_approval"
-  note "· GATE_RULES deps.upgrade:deps:expo-sharing · USAGE has every task · MODEL_PINNED yes."
-  pause
 done
 
-# ── 9 ─────────────────────────────────────────────────────────────────────
-stage "Results"
+# ── Summary ───────────────────────────────────────────────────────────────
+# No pause: the runs end unattended, so go straight to the summary and leave the results
+# under it, where you'll see them when you come back.
+notify "Both adapter runs finished"
+finish
 grep '^M3_' "$ENV_FILE" | sed 's/^/    /'
+say ""
+note "Wanted per adapter: PLAN_STATES all done · QUOTA_PARKED no · ALLOWLISTED_GATED no"
+note "· GATE_STATE awaiting_approval · GATE_RULES deps.upgrade:deps:expo-sharing"
+note "· USAGE has every task · MODEL_PINNED yes."
 say ""
 say "Left in place for inspection (transcripts, worktrees, prompts):"
 for a in "${ADAPTERS[@]}"; do step "$AGENT_HOME/.rnship/m3-$a and $AGENT_HOME/apps/m3-$a"; done
+step "$PRE (the preflight)"
 note "Clean up later with:"
 note "  sudo -u $AGENT rm -rf $AGENT_HOME/.rnship/m3-* $AGENT_HOME/apps/m3-*"
 note "The share tasks stay awaiting_approval on purpose; don't approve them."
-pause "Press Enter for the summary"
-
-finish
+printf '\n'

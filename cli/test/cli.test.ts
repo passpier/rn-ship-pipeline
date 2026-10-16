@@ -71,6 +71,21 @@ describe('rnship policy', () => {
     });
     expect(settings.permissions.deny).toContain('Bash(eas credentials*)');
   });
+
+  it('compile allows what a dontAsk session needs, inside the worktree only', () => {
+    const out = mkdtempSync(join(tmpdir(), 'rnship-compile-'));
+    rnship('policy', 'compile', projectPolicy('version: 1\nrules: []\n'), '--out', out);
+
+    const { permissions } = JSON.parse(readFileSync(join(out, 'executor-settings.json'), 'utf8'));
+    // Without these, dontAsk denied every write and Bash call (M3, 2026-10-16).
+    expect(permissions.allow).toEqual(expect.arrayContaining(['Edit(./**)', 'Bash']));
+    expect(permissions.allow).not.toContain('Edit');
+    expect(permissions.allow).not.toContain('Write');
+    expect(permissions.deny).toEqual(expect.arrayContaining(['Edit(~/.claude/**)', 'Edit(.claude/**)', 'Bash(npm install*)']));
+    expect(permissions.ask).toContain('Bash(eas submit*)');
+    const settings = JSON.parse(readFileSync(join(out, 'settings.json'), 'utf8'));
+    expect(settings.permissions.allow).toBeUndefined();
+  });
 });
 
 describe('rnship ota', () => {

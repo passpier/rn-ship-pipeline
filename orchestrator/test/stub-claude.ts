@@ -13,13 +13,16 @@
 //   wrong_model  init reports another model than --model
 //   api500    an API Error: 500 result
 // `init` is ok (guard plugin loaded), no_plugin or plugin_error. Review prompts get REVIEW_DONE.
+// With `permissions: "enforce"`, a task session applies --permission-mode dontAsk the way
+// Claude Code does: unless allow rules (the --settings file's or --allowedTools) cover its
+// writes in the worktree, Bash, and (ralphex) the plan file, they're denied and it gives up.
 // Prompts that start with `# rnship task: <key>` (the claude-p adapter) get the work done
 // for that key and the signal in the final result, as a real session would end.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
-type Scenario = { init?: 'ok' | 'no_plugin' | 'plugin_error'; calls?: string[]; resetsAt?: number };
+type Scenario = { init?: 'ok' | 'no_plugin' | 'plugin_error'; calls?: string[]; resetsAt?: number; permissions?: 'enforce' };
 
 const scenarioPath = process.env.STUB_SCENARIO!;
 const scenario = JSON.parse(readFileSync(scenarioPath, 'utf8')) as Scenario;
@@ -50,6 +53,20 @@ emit({
 });
 
 const taskKey = /^# rnship task: (\S+)/.exec(prompt)?.[1];
+const planPath = /Read the plan file at (\S+?\.md)/.exec(prompt)?.[1];
+
+if (scenario.permissions === 'enforce' && argv[argv.indexOf('--permission-mode') + 1] === 'dontAsk') {
+  const settings = JSON.parse(readFileSync(argv[argv.indexOf('--settings') + 1]!, 'utf8')) as { permissions?: { allow?: string[] } };
+  const allowed = [...(settings.permissions?.allow ?? []), ...argv.flatMap((arg, i) => (argv[i - 1] === '--allowedTools' ? arg.split(',') : []))];
+  const needs = planPath ? ['Edit(./**)', 'Bash', `Edit(/${planPath})`] : taskKey ? ['Edit(./**)', 'Bash'] : [];
+  const missing = needs.filter((rule) => !allowed.includes(rule));
+  if (missing.length > 0) {
+    const denials = missing.map((rule) => ({ tool_name: rule.split('(')[0], tool_input: rule === 'Bash' ? { command: 'git commit' } : { file_path: rule.slice(5, -1) } }));
+    if (planPath) say('<<<RALPHEX:TASK_FAILED>>>');
+    result({ result: `${missing.join(', ')} denied in dontAsk mode\n<<<RNSHIP:TASK_FAILED>>> nothing could be written`, permission_denials: denials });
+    process.exit(0);
+  }
+}
 const commit = (file: string, message: string) => {
   mkdirSync('stub', { recursive: true });
   writeFileSync(join('stub', file), `${message}\n`);
@@ -101,7 +118,6 @@ if (/^# rnship review: /.test(prompt)) {
   process.exit(0);
 }
 
-const planPath = /Read the plan file at (\S+?\.md)/.exec(prompt)?.[1];
 if (!planPath) {
   // The probe, or a review pass.
   if (prompt !== 'ok') say('<<<RALPHEX:REVIEW_DONE>>>');

@@ -30,6 +30,9 @@ export function decide(
       }
       return { state: 'retry_wait', patch: { ...base, resume_at: at(0) }, reason: 'validation failed; retrying with the failure digest' };
     }
+    case 'denied':
+      // Settings or policy refused the tools the task needed; a retry or a bigger model gets the same refusal.
+      return { state: 'needs_human', patch: { failure_class: status, failure_digest: digest }, reason: 'tool calls were denied; check the executor settings or the task' };
     case 'infra': {
       // npm or network trouble: back off, and it doesn't count as an attempt.
       const failures = task.infra_failures + 1;

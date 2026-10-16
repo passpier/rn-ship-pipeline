@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { compilePolicy, loadBasePolicy } from '@rnship/policy';
 import { describe, expect, it } from 'vitest';
 import {
   classify,
@@ -58,8 +59,11 @@ describe('ralphex adapter config', () => {
   const executor = new RalphexExecutor({ ralphex: 'ralphex', pluginDir: '/opt/rn ship/plugin', settingsFile: '/etc/rnship/executor-settings.json', workDir: '/tmp' });
 
   it('passes the settings as a file, keeps retries in the orchestrator, and fails closed on a missing plugin', () => {
-    const config = executor.config();
+    const config = executor.config('/tmp/run-1-x/rnship-1-a1.md');
     expect(config).toContain(`claude_command = ${SHIM}`);
+    // dontAsk denies the plan file outside the worktree unless it's allowed (M3, 2026-10-16), and only that file.
+    expect(config).toMatch(/^claude_args = .* --allowedTools Read\(\/\/tmp\/run-1-x\/rnship-1-a1\.md\),Edit\(\/\/tmp\/run-1-x\/rnship-1-a1\.md\)$/m);
+    expect(config).not.toContain('--add-dir');
     expect(config).toContain("--plugin-dir '/opt/rn ship/plugin' --settings /etc/rnship/executor-settings.json --setting-sources user");
     expect(config).toContain('--permission-mode dontAsk');
     expect(config).not.toContain('dangerously-skip-permissions');
@@ -154,17 +158,17 @@ describe('claude shim', () => {
 
 // Runs the pinned ralphex binary (v1.7.0, see docs/spikes/S8.md) against the stub claude.
 describe.skipIf(!RALPHEX)('ralphex adapter against the real binary', () => {
-  const settings = () => {
+  const settingsFile = (settings: object) => {
     const path = join(mkdtempSync(join(tmpdir(), 'rnship-settings-')), 'executor-settings.json');
-    writeFileSync(path, '{}\n');
+    writeFileSync(path, JSON.stringify(settings) + '\n');
     return path;
   };
-  const ralphex = (stub: object, opts: { review?: boolean } = {}) =>
+  const ralphex = (stub: object, opts: { review?: boolean; settings?: object } = {}) =>
     new RalphexExecutor({
       ralphex: RALPHEX!,
       claude: STUB,
       pluginDir: PLUGIN,
-      settingsFile: settings(),
+      settingsFile: settingsFile(opts.settings ?? {}),
       workDir: mkdtempSync(join(tmpdir(), 'rnship-ralphex-')),
       env: { STUB_SCENARIO: scenario(stub) },
       review: opts.review,
@@ -194,6 +198,17 @@ describe.skipIf(!RALPHEX)('ralphex adapter against the real binary', () => {
     expect([h.task('a').state, h.task('b').state]).toEqual(['done', 'done']);
     expect(gitIn(h.worktree(), 'log', '--format=%s', 'main..HEAD').split('\n')).toEqual(['feat: task 2', 'feat: task 1']);
     expect(h.db.prepare('SELECT model_id, amount FROM ledger').all()).toEqual([{ model_id: 'claude-sonnet-5-5', amount: 30 }]);
+  });
+
+  it('can edit the plan outside the worktree under dontAsk, through ralphex claude_args (M3, 2026-10-16)', async () => {
+    const h = harness();
+    const settings = compilePolicy(loadBasePolicy(), { hookRulesPath: '/etc/rnship/hook-rules.json' }).executorSettings!;
+    h.executor = ralphex({ permissions: 'enforce' }, { settings }) as never;
+    h.importTasks([{ id: 'a' }]);
+
+    await h.tick();
+
+    expect(h.task('a').state).toBe('done');
   });
 
   it('parks a quota hit mid-batch, keeps the finished task, and resumes after resetAt (M2 acceptance)', async () => {

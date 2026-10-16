@@ -15,7 +15,8 @@ export const GUARD_PLUGIN_ID = 'rnship@inline';
 // executor run therefore passes this file as `--settings <file> --setting-sources user`;
 // `--settings` beats every file the agent can write. Keep it outside the agent's home,
 // owned by your user. See docs/adr/0002-executor-settings-file.md.
-export type ExecutorSettings = ClaudeSettings & {
+export type ExecutorSettings = {
+  permissions: ClaudeSettings['permissions'] & { allow: string[] };
   disableAllHooks: false;
   enabledPlugins: Record<string, true>;
   env: { RNSHIP_HOOK_RULES: string };
@@ -33,8 +34,15 @@ export type CompiledPolicy = {
   codeowners?: string;
 };
 
-// `require_approval` compiles to `ask`, which `claude -p` in dontAsk mode turns into a
-// denial that the orchestrator maps to awaiting_approval.
+// Every executor session runs `--permission-mode dontAsk`, which denies any tool call that no
+// `allow` rule covers. So the executor settings allow what a task needs, inside the worktree
+// only (`./` is the session's cwd), and deny and ask still win over allow. `require_approval`
+// compiles to `ask`, which dontAsk also turns into a denial; the gate itself is the diff check.
+// Edits are never allowed bare: `--setting-sources user` still loads the agent's own
+// ~/.claude/settings.json, whose arrays merge into these (sandbox domains, extra dirs).
+export const EXECUTOR_ALLOW = ['Read(./**)', 'Glob', 'Grep', 'Edit(./**)', 'Bash', 'Skill'];
+const EXECUTOR_DENY = ['Edit(~/.claude/**)'];
+
 export function compilePolicy(policy: Policy, opts: { codeowner?: string; hookRulesPath?: string } = {}): CompiledPolicy {
   const deny = new Set<string>(PROTECTED_PATHS.map((path) => `Edit(${path})`));
   const ask = new Set<string>();
@@ -51,7 +59,7 @@ export function compilePolicy(policy: Policy, opts: { codeowner?: string; hookRu
     hookRules: policy,
     executorSettings: opts.hookRulesPath
       ? {
-          ...settings,
+          permissions: { allow: EXECUTOR_ALLOW, deny: [...settings.permissions.deny, ...EXECUTOR_DENY], ask: settings.permissions.ask },
           disableAllHooks: false,
           enabledPlugins: { [GUARD_PLUGIN_ID]: true },
           env: { RNSHIP_HOOK_RULES: opts.hookRulesPath },

@@ -268,7 +268,7 @@ async function runBatch(ctx: Ctx, batch: TaskRow[]): Promise<BatchReport> {
   const unfinished = tasks.filter((t) => !completed.has(t.id));
   if (unfinished.length > 0) {
     // A "passed" run that left tasks unfinished is an executor bug: treat it as a crash.
-    const status = result.status === 'passed' ? 'crashed' : result.status;
+    const status = result.status === 'passed' ? 'crashed' : deniedRun(result) ? 'denied' : result.status;
     resetWorktree(worktree, {
       sha: crashed ? startSha : undefined,
       patchPath: join(bundleDir(ctx, unfinished[0]!), `attempt-${attempt}-${Date.now()}.patch`),
@@ -279,13 +279,27 @@ async function runBatch(ctx: Ctx, batch: TaskRow[]): Promise<BatchReport> {
       resetAt = park(ctx.db, { kind, resetAt: result.resetAt, probeIntervalMs: ctx.probeIntervalMs }, ctx.now());
       if (kind === 'weekly') ctx.notify({ title: 'weekly cap reached', message: `all tasks parked until ${resetAt}`, taskIds: unfinished.map((t) => t.id) });
     }
-    for (const task of unfinished) fail(ctx, task, working, status, { resetAt, failureDigest: result.failureDigest ?? result.reason, worktree });
+    const digest = result.failureDigest ?? result.reason;
+    const failureDigest = status === 'denied' ? [`denied: ${result.deniedToolCalls.map(describeDenial).join(', ')}`, digest].filter(Boolean).join('\n') : digest;
+    for (const task of unfinished) fail(ctx, task, working, status, { resetAt, failureDigest, worktree });
   }
   if (finished.length > 0) {
     for (const task of finished) transition(ctx.db, task.id, working, 'validating', { patch: { lease_pid: null }, now: ctx.now() });
     await finish(ctx, finished.map((t) => getTask(ctx.db, t.id)), {});
   }
   return { ...report, status: result.status };
+}
+
+/** A task that failed while the session had tool calls denied (M3: dontAsk without allow rules). */
+function deniedRun(result: ExecResult): boolean {
+  return result.status === 'validation_failed' && result.deniedToolCalls.length > 0;
+}
+
+/** `Bash(npm install left-pad)` from a stream-json permission denial. */
+function describeDenial(denial: unknown): string {
+  const { tool_name: tool, tool_input: input } = (denial ?? {}) as { tool_name?: unknown; tool_input?: Record<string, unknown> };
+  const arg = input?.command ?? input?.file_path ?? input?.path ?? input?.pattern;
+  return `${typeof tool === 'string' ? tool : 'tool'}${typeof arg === 'string' ? `(${arg.slice(0, 120)})` : ''}`;
 }
 
 function fail(

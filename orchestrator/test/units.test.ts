@@ -43,11 +43,13 @@ describe('retry ladder', () => {
     expect(third.patch.resume_at).toBe('2026-10-16T00:04:00.000Z');
   });
 
-  it('retries a crash once, sends a timeout to you, and gates a policy block', () => {
+  it('retries a crash once, sends a timeout or a denial to you, and gates a policy block', () => {
     expect(decide(fresh, 'crashed', { now }).state).toBe('retry_wait');
     expect(decide({ ...fresh, crashes: 1 }, 'crashed', { now }).state).toBe('needs_human');
     expect(decide(fresh, 'timeout', { now }).state).toBe('needs_human');
     expect(decide(fresh, 'policy_blocked', { now }).state).toBe('awaiting_approval');
+    expect(decide(fresh, 'denied', { now })).toMatchObject({ state: 'needs_human', patch: { failure_class: 'denied' } });
+    expect(decide(fresh, 'denied', { now }).patch).not.toHaveProperty('tier');
     expect(decide(fresh, 'quota_exhausted', { now, resetAt: 'x' })).toMatchObject({ state: 'quota_parked', patch: { resume_at: 'x' } });
   });
 });

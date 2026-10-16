@@ -40,11 +40,17 @@ export class RalphexExecutor implements Executor {
     return { review: this.opts.review ?? false };
   }
 
-  config(): string {
+  /**
+   * The run's ralphex config. Claude ticks the plan's checkboxes, and the plan lives outside
+   * the worktree, where dontAsk denies everything: so the session may read and edit that one
+   * file. Not its directory, which holds this config and its claude_command.
+   */
+  config(plan: string): string {
     const errorPatterns = [...new Set([...CLAUDE_ERROR_PATTERNS, ...(this.opts.extraLimitPatterns ?? []), PLUGIN_MISSING, MODEL_MISMATCH])];
+    const planTools = `Read(/${plan}),Edit(/${plan})`; // `//path` is an absolute path in a permission rule
     return [
       `claude_command = ${SHIM}`,
-      `claude_args = ${claudeArgs(this.opts).map(ralphexArg).join(' ')}`,
+      `claude_args = ${[...claudeArgs(this.opts), '--allowedTools', planTools].map(ralphexArg).join(' ')}`,
       `claude_limit_patterns = ${limitPatterns(this.opts).join(',')}`,
       `claude_error_patterns = ${errorPatterns.join(',')}`,
       'task_retry_count = 0',
@@ -64,7 +70,7 @@ export class RalphexExecutor implements Executor {
     const stem = `rnship-${req.tasks.map((t) => t.id).join('-')}-a${req.attempt}${req.phase === 'review' ? '-review' : ''}`;
     const plan = join(dir, `${stem}.md`);
     mkdirSync(configDir);
-    writeFileSync(join(configDir, 'config'), this.config());
+    writeFileSync(join(configDir, 'config'), this.config(plan));
     writeFileSync(plan, renderPlan(req));
 
     const phaseArgs =

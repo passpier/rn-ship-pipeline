@@ -3,7 +3,9 @@ import type { ModelSpec } from '@rnship/policy';
 // The executor is a stateless "run these tasks to green" function (D2). The orchestrator
 // owns all state; ralphex, raw `claude -p`, the API and the fake are adapters behind this.
 
-export type ExecStatus = 'passed' | 'validation_failed' | 'quota_exhausted' | 'policy_blocked' | 'timeout' | 'crashed' | 'infra';
+// `denied` is never an executor's own verdict: tick sets it when a task failed and the
+// session had tool calls denied, since no retry can lift a denial.
+export type ExecStatus = 'passed' | 'validation_failed' | 'denied' | 'quota_exhausted' | 'policy_blocked' | 'timeout' | 'crashed' | 'infra';
 
 /** Five-hour window, weekly cap, or a limit error we couldn't classify (S4). */
 export type LimitKind = 'five_hour' | 'weekly' | 'unknown';

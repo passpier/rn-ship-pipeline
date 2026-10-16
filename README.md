@@ -29,7 +29,7 @@ rnship baseline approve .rnship/approved-baseline.yaml   # run as you: approve t
 
 ## Guardrails for the executor
 - **`plugin/`**: a Claude Code plugin whose `PreToolUse` hook (`onFailure: block`) blocks commands and edits that the compiled policy gates. It sees through `sh -c`, `npx eas-cli`, env prefixes, and `$(…)`. It's early feedback, not the gate.
-- **`executor-settings.json`**: pass it to every run as `claude -p --plugin-dir plugin --settings <file> --setting-sources user` (ADR 0002). Add `--plugin-dir plugins/rn-game` for game apps. The guard is always required, and rn-game is optional. Otherwise the agent can switch hooks off through project settings (S2).
+- **`executor-settings.json`**: it allows edits and Bash inside the worktree only, since sessions run `--permission-mode dontAsk` and deny anything no rule allows. Pass it to every run as `claude -p --plugin-dir plugin --settings <file> --setting-sources user` (ADR 0002). Add `--plugin-dir plugins/rn-game` for game apps. The guard is always required, and rn-game is optional. Otherwise the agent can switch hooks off through project settings (S2).
 - **`rnship sandbox run -- <cmd>`**: runs validation commands (tsc, jest, expo export) under `sandbox-exec`. Secrets are unreadable, writes to `~/.claude` and LaunchAgents are refused, and network goes only through an allowlisting localhost proxy.
 
 ## Approvals (run as you, never as `rnship-agent`)
@@ -98,7 +98,7 @@ Each tick runs these steps:
 
 Every live executor starts Claude through `orchestrator/bin/claude-shim.ts` (with ralphex, as `claude_command`). The shim stops any session whose `system/init` doesn't list the guard plugin, or reports another model than the pinned `--model`. It keeps the stream-json transcripts, which carry usage, denials, and reset times. The ledger records usage and the model that ran once per task with `claude-p`, and once per batch with ralphex, which can't split usage by task.
 
-Retries follow the failure class: a validation failure retries at the same tier, then one tier up (`policy/routing.yaml`), then goes to you. A gated change waits for `rnship task approve`, and a new commit invalidates that approval.
+Retries follow the failure class: a validation failure retries at the same tier, then one tier up (`policy/routing.yaml`), then goes to you. A failed task whose session had tool calls denied goes to you at once, with the denials in its digest, since no retry or bigger model lifts a denial. A gated change waits for `rnship task approve`, and a new commit invalidates that approval.
 
 ## Layout
 - `policy/`: schema, merge, compile, hook evaluator, sandbox lists, and model routing tiers

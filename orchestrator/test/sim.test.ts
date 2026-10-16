@@ -106,6 +106,23 @@ describe('orchestrator simulation', () => {
     expect(readdirSync(bundle)).toEqual(expect.arrayContaining(['task.json', 'failure.txt', 'diff.patch']));
   });
 
+  it('hands a task whose tool calls were denied straight to you, without a retry or a bigger model', async () => {
+    const denied = {
+      status: 'validation_failed' as const,
+      failureDigest: 'the session gave up: Write, Edit and Bash are all denied',
+      deniedToolCalls: [{ tool_name: 'Write', tool_input: { file_path: 'src/Counter.tsx', content: '…' } }],
+    };
+    const h = harness({ tasks: { a: [denied] } });
+    h.importTasks([{ id: 'a', tier: 'T1' }]);
+
+    await h.tick();
+
+    expect(h.executor.calls).toHaveLength(1);
+    expect(h.task('a')).toMatchObject({ state: 'needs_human', tier: 'T1', validation_failures: 0, failure_class: 'denied' });
+    expect(h.task('a').failure_digest).toBe('denied: Write(src/Counter.tsx)\nthe session gave up: Write, Edit and Bash are all denied');
+    expect(h.notices).toEqual([expect.objectContaining({ title: 'task a needs you' })]);
+  });
+
   it('turns a duplicate signal into one task', () => {
     const h = harness();
     const signal = { source: 'sentry', issue_id: '123', runtime_version: 'fp-abc' };

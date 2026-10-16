@@ -19,6 +19,8 @@ export type FakeOutcome = {
   /** Extra files to write and commit with the task, e.g. { "package.json": "..." }. */
   files?: Record<string, string>;
   failureDigest?: string;
+  /** Permission denials the run reports, as stream-json `permission_denials` entries. */
+  deniedToolCalls?: unknown[];
 };
 
 export type FakeScript = {
@@ -61,7 +63,7 @@ export class FakeExecutor implements Executor {
       resetAt: outcome?.resetAt,
       limitKind: outcome?.limitKind,
       failureDigest: outcome?.failureDigest ?? (status === 'passed' ? undefined : `fake: ${status}`),
-      deniedToolCalls: [],
+      deniedToolCalls: outcome?.deniedToolCalls ?? [],
       usage: { ...NO_USAGE, outputTokens: 100 * completed.length },
       modelId: this.script.modelId ?? req.model.id,
     });
