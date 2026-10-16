@@ -2,7 +2,7 @@
 
 Takes Expo-managed React Native apps from an approved change to a human-approved release with Claude Code. Agent executors write the app code; what sets it apart is the release side: deciding between an OTA update and a store build, approval gates that fail closed, quota-aware orchestration, and Sentry signals that start work.
 
-**Status: v0.1 in progress.** M0 (policy engine, OTA classifier) is done. Most of M1 is in: the guard plugin, executor settings, `rnship policy check`, the approve commands, the validation sandbox, and the release workflow templates. M1 acceptance (a), which needs the `rnship-agent` user (S0), and (e), which needs a fixture app repo, are still open. Scope, plan and milestones: [STATUS.md](STATUS.md).
+**Status: v0.1 ready to tag.** M0 (policy engine, OTA classifier) and M1 are done. M1 covers the guard plugin, executor settings, `rnship policy check`, the approve commands, the validation sandbox, and the release workflow templates. Its acceptance ran on a private fixture app repo ([M1e](docs/spikes/M1e.md)). Scope, plan and milestones: [STATUS.md](STATUS.md).
 
 ## Requirements
 Node 24 (`.nvmrc`) and pnpm 10.
