@@ -19,7 +19,7 @@ import {
 } from '@rnship/release';
 import { importTasks, loadTasks, openDb, tick } from '@rnship/orchestrator';
 import { policyCheck } from './check.ts';
-import { dbPath, desktopNotify, makeExecutor, orchestratorHome, policyDiffCheck, sandboxValidate, taskApprove } from './orchestrate.ts';
+import { dbPath, desktopNotify, ledgerRows, makeExecutor, orchestratorHome, policyDiffCheck, sandboxValidate, taskApprove } from './orchestrate.ts';
 import { sandboxRun } from './sandbox.ts';
 
 const USAGE = `usage:
@@ -45,6 +45,8 @@ const USAGE = `usage:
   rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]
   rnship tasks import <tasks.yaml> --app <name> --flow <A|B> --repo <app-repo> [--db <path>]
   rnship tasks list [--db <path>]
+  rnship ledger [--db <path>]
+      every executor call: task, model that ran, tokens (input + output)
   rnship tick [--db <path>] [--home <dir>] [--batch <n>] --executor fake --fake-script <json>
   rnship tick [--db <path>] [--home <dir>] [--batch <n>] --executor claude-p --settings <executor-settings.json>
               [--plugin-dir <knowledge-plugin>]... [--review]
@@ -81,7 +83,7 @@ function required(values: Record<string, unknown>, ...names: string[]): void {
 }
 
 async function main(argv: string[]): Promise<void> {
-  const [group, command, ...rest] = argv[0] === 'tick' ? ['tick', '', ...argv.slice(1)] : argv;
+  const [group, command, ...rest] = argv[0] === 'tick' || argv[0] === 'ledger' ? [argv[0], '', ...argv.slice(1)] : argv;
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,
@@ -216,6 +218,10 @@ async function main(argv: string[]): Promise<void> {
       const db = openDb(dbPath(values.db));
       const rows = db.prepare('SELECT id, run_id, key, state, phase, tier, validation_failures, resume_at, head_sha, failure_class FROM tasks ORDER BY id').all();
       console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    case 'ledger': {
+      console.log(JSON.stringify(ledgerRows(openDb(dbPath(values.db))), null, 2));
       return;
     }
     case 'tick': {

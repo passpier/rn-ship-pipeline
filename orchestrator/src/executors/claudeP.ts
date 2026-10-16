@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ModelSpec } from '@rnship/policy';
-import type { ExecRequest, ExecResult, ExecTask, Executor, ProbeResult } from '../executor.ts';
+import type { ExecRequest, ExecResult, ExecTask, Executor, ProbeResult, TaskUsage } from '../executor.ts';
 import { combine, MODEL_MISMATCH, PLUGIN_MISSING, type StreamSummary } from '../streamJson.ts';
 import { git, headSha, resetWorktree } from '../worktree.ts';
 import { claudeArgs, limitIn, limitPatterns, probeQuota, readTranscripts, SHIM, spawnSession, timedOut, type SessionOptions, type SessionRun } from './claudeSession.ts';
@@ -98,6 +98,7 @@ export class ClaudePExecutor implements Executor {
     mkdirSync(this.opts.workDir, { recursive: true });
     const dir = mkdtempSync(join(this.opts.workDir, `run-${req.tasks[0]!.id}-`));
     const summaries: StreamSummary[] = [];
+    const taskUsage: TaskUsage[] = [];
     const completed: number[] = [];
     const finish = (outcome: Classified): ExecResult => {
       const all = combine(summaries);
@@ -108,6 +109,7 @@ export class ClaudePExecutor implements Executor {
         deniedToolCalls: all.permissionDenials,
         usage: all.usage,
         modelId: all.init?.model,
+        taskUsage: taskUsage.length > 0 ? taskUsage : undefined,
         transcriptPath: dir,
         failureDigest: outcome.status === 'passed' ? undefined : (outcome.failureDigest ?? outcome.reason),
       };
@@ -133,6 +135,7 @@ export class ClaudePExecutor implements Executor {
       writeFileSync(join(dir, `${session.name}.log`), run.output);
       const summary = readTranscripts(transcripts);
       summaries.push(summary);
+      if (session.task) taskUsage.push({ taskId: session.task.id, usage: summary.usage, modelId: summary.init?.model });
 
       const outcome = classifySession({
         run,

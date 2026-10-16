@@ -11,6 +11,7 @@ import {
   getTask,
   openDb,
   RalphexExecutor,
+  type Db,
   type DiffCheck,
   type Executor,
   type Validate,
@@ -82,6 +83,14 @@ export function makeExecutor(
 }
 
 export { desktopNotify };
+
+/** `rnship ledger`: every recorded executor call, with the task it ran and the model that ran it. */
+export function ledgerRows(db: Db): unknown[] {
+  return db
+    .prepare('SELECT l.id, l.task_id, t.key, l.budget, l.model_id, l.amount, l.detail, l.at FROM ledger l LEFT JOIN tasks t ON t.id = l.task_id ORDER BY l.id')
+    .all()
+    .map((row) => ({ ...row, detail: typeof row.detail === 'string' ? (JSON.parse(row.detail) as unknown) : row.detail }));
+}
 
 /**
  * `rnship task approve`: run as you. Refuses a SHA that isn't the task's current head, so

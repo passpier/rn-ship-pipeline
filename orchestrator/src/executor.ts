@@ -26,6 +26,8 @@ export type ExecRequest = {
 
 export type Usage = { inputTokens: number; outputTokens: number };
 
+export type TaskUsage = { taskId: number; usage: Usage; modelId?: string };
+
 export type ExecResult = {
   status: ExecStatus;
   /** Tasks finished before the run stopped. A mid-batch quota hit keeps these. */
@@ -39,6 +41,8 @@ export type ExecResult = {
   usage: Usage;
   /** The model that actually ran, from `system/init`. */
   modelId?: string;
+  /** Usage split by task, when the executor ran one session per task. */
+  taskUsage?: TaskUsage[];
   transcriptPath?: string;
   failureDigest?: string;
 };

@@ -73,7 +73,10 @@ describe('claude-p adapter against stub claude', () => {
 
     expect([h.task('a').state, h.task('b').state]).toEqual(['done', 'done']);
     expect(gitIn(h.worktree(), 'log', '--format=%s', 'main..HEAD').split('\n')).toEqual(['feat: b', 'feat: a']);
-    expect(h.db.prepare('SELECT model_id, amount FROM ledger').all()).toEqual([{ model_id: 'claude-sonnet-5-5', amount: 30 }]);
+    expect(h.db.prepare('SELECT task_id, model_id, amount FROM ledger ORDER BY id').all()).toEqual([
+      { task_id: h.task('a').id, model_id: 'claude-sonnet-5-5', amount: 15 },
+      { task_id: h.task('b').id, model_id: 'claude-sonnet-5-5', amount: 15 },
+    ]);
   });
 
   it('parks a quota hit mid-batch, keeps the finished task, and resumes after resetAt (M2 acceptance)', async () => {

@@ -85,6 +85,7 @@ rnship tasks import tasks.yaml --app <name> --flow A --repo <app-repo>   # idemp
 rnship tick --executor claude-p --settings <executor-settings.json>       # one pass; the LaunchAgent runs it every 15 min
 rnship tick --executor ralphex --settings <executor-settings.json>        # the same, through ralphex; add --plugin-dir plugins/rn-game for game apps
 rnship tasks list
+rnship ledger                                                             # usage per executor call: task, model that ran, tokens
 rnship task approve <task-id> <head-sha>                                  # run as you: approves gated changes at exactly that commit
 ```
 
@@ -95,7 +96,7 @@ Each tick runs these steps:
 4. Re-runs each task's validation commands under the validation sandbox.
 5. Diff-checks the result with `rnship policy check`.
 
-Every live executor starts Claude through `orchestrator/bin/claude-shim.ts` (with ralphex, as `claude_command`). The shim stops any session whose `system/init` doesn't list the guard plugin, or reports another model than the pinned `--model`. It keeps the stream-json transcripts, which carry usage, denials, and reset times.
+Every live executor starts Claude through `orchestrator/bin/claude-shim.ts` (with ralphex, as `claude_command`). The shim stops any session whose `system/init` doesn't list the guard plugin, or reports another model than the pinned `--model`. It keeps the stream-json transcripts, which carry usage, denials, and reset times. The ledger records usage and the model that ran once per task with `claude-p`, and once per batch with ralphex, which can't split usage by task.
 
 Retries follow the failure class: a validation failure retries at the same tier, then one tier up (`policy/routing.yaml`), then goes to you. A gated change waits for `rnship task approve`, and a new commit invalidates that approval.
 

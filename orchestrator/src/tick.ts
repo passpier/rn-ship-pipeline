@@ -245,7 +245,19 @@ async function runBatch(ctx: Ctx, batch: TaskRow[]): Promise<BatchReport> {
   } catch (error) {
     result = { status: 'crashed', completedTaskIds: [], reason: String(error), failureDigest: String(error), deniedToolCalls: [], usage: NO_USAGE };
   }
-  recordUsage(ctx.db, { modelId: result.modelId ?? model.id, usage: result.usage, detail: { tasks: report.taskKeys, phase: first.phase, status: result.status } }, ctx.now());
+  // One ledger row per task when the executor can split usage by task, or when the batch
+  // is a single task; otherwise one row for the whole batch.
+  const detail = (taskKeys: string[]) => ({ tasks: taskKeys, phase: first.phase, status: result.status });
+  if (result.taskUsage?.length) {
+    const keyOf = new Map(tasks.map((t) => [t.id, t.key]));
+    for (const entry of result.taskUsage) {
+      const key = keyOf.get(entry.taskId);
+      recordUsage(ctx.db, { taskId: entry.taskId, modelId: entry.modelId ?? model.id, usage: entry.usage, detail: detail(key ? [key] : []) }, ctx.now());
+    }
+  } else {
+    const taskId = tasks.length === 1 ? tasks[0]!.id : undefined;
+    recordUsage(ctx.db, { taskId, modelId: result.modelId ?? model.id, usage: result.usage, detail: detail(report.taskKeys) }, ctx.now());
+  }
 
   // A crashed run leaves the worktree in an unknown state (or, with plugin_missing, holds
   // work from a session without the guard): none of its tasks count, and the reset below

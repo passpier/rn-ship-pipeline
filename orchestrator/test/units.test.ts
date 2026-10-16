@@ -99,7 +99,18 @@ describe('tick', () => {
     await h.tick({ validate: async () => (++calls === 1 ? { ok: false, digest: 'tsc: 1 error' } : { ok: true }) });
     expect(h.executor.calls.map((c) => c.failureDigest)).toEqual([undefined, 'tsc: 1 error']);
     expect(h.task('a').state).toBe('done');
-    expect(h.db.prepare('SELECT model_id FROM ledger').all()).toEqual([{ model_id: 'claude-sonnet-5-5' }, { model_id: 'claude-sonnet-5-5' }]);
+    const id = h.task('a').id;
+    expect(h.db.prepare('SELECT task_id, model_id FROM ledger').all()).toEqual([
+      { task_id: id, model_id: 'claude-sonnet-5-5' },
+      { task_id: id, model_id: 'claude-sonnet-5-5' },
+    ]);
+  });
+
+  it('records a multi-task batch as one row when the executor gives no per-task usage', async () => {
+    const h = harness();
+    h.importTasks([{ id: 'a' }, { id: 'b' }]);
+    await h.tick();
+    expect(h.db.prepare('SELECT task_id, detail FROM ledger').all()).toEqual([{ task_id: null, detail: JSON.stringify({ tasks: ['a', 'b'], phase: 'tasks', status: 'passed' }) }]);
   });
 
   it('skips a pass while another live tick holds the lock', async () => {
