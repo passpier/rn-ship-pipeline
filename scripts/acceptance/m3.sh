@@ -476,7 +476,13 @@ for a in "${ADAPTERS[@]}"; do
   note "npm ci in ~/apps/m3-$a (policy check reads the Expo config from node_modules)…"
   as_agent_sh "cd apps/m3-$a && npm ci --no-audit --no-fund --loglevel=error"
 done
-as_agent_sh "rnship policy compile apps/m3-claude-p/.rnship/policy.yaml --out .rnship/m3/build"
+# ADR 0002: the settings file and hook rules are yours and only readable by the agent, so a
+# session can't loosen the next one. Compiled from your fixture checkout, which is what the
+# agent cloned.
+mkdir -p "$SHARED/build" && chmod 755 "$SHARED/build"
+rnship policy compile "$WORK/.rnship/policy.yaml" --out "$SHARED/build"
+chmod 644 "$SHARED"/build/*
+as_agent test -r "$SHARED/build/executor-settings.json" || fail "$AGENT can't read $SHARED/build/executor-settings.json"
 CHECK=$(as_agent_sh "rnship policy check apps/m3-claude-p --base-ref HEAD" || true)
 record M3_BASELINE_APPROVED_FOR_AGENT "$(jq -r '.baseline.approved' <<<"$CHECK")"
 record M3_BASELINE_CLEAN_CHECK "$(jq -r 'if .ok then "ok" else (.gates | map(.ruleId) | join(",")) end' <<<"$CHECK")"
@@ -547,7 +553,7 @@ export RNSHIP_DB="\$HOME/.rnship/m3-\$adapter/orchestrator.db"
 cd "\$HOME" || exit 1
 rnship tasks import "\$2" --app "m3-\$adapter" --flow A --repo "\$HOME/apps/m3-\$adapter" || exit 1
 if [ "\$adapter" = ralphex ]; then set -- --ralphex "$SHARED/bin/ralphex"; else set --; fi
-rnship tick --executor "\$adapter" --settings "\$HOME/.rnship/m3/build/executor-settings.json" "\$@"
+rnship tick --executor "\$adapter" --settings "$SHARED/build/executor-settings.json" "\$@"
 echo "tick exit=\$?"
 RUN
 chmod 644 "$SHARED/plan.yaml" "$SHARED/gate.yaml" && chmod 755 "$SHARED/m3-run.sh"
