@@ -4,20 +4,22 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { classify, recordBuild } from '@rnship/ota';
-import { compilePolicy, loadBasePolicy, loadPolicy, loadRouting, mergePolicy, seatbeltProfile, type Policy } from '@rnship/policy';
+import { compilePolicy, loadBasePolicy, loadPolicy, loadRouting, mergePolicy, seatbeltProfile, TIERS, type Policy, type Tier } from '@rnship/policy';
 import {
   ApprovalError,
   baselineDigest,
   loadBaseline,
   mergeApprove,
   releaseApproveBuild,
+  releaseApproveRollback,
+  releaseApproveRollout,
   releaseApproveSubmit,
   releaseApproveUpdate,
   stateDir,
   writeApproval,
   type ApproveResult,
 } from '@rnship/release';
-import { importTasks, loadTasks, openDb, tick } from '@rnship/orchestrator';
+import { importTasks, loadTasks, openDb, pollSentry, SentryClient, tick } from '@rnship/orchestrator';
 import { policyCheck } from './check.ts';
 import { dbPath, desktopNotify, ledgerRows, makeExecutor, orchestratorHome, policyDiffCheck, sandboxValidate, taskApprove } from './orchestrate.ts';
 import { sandboxRun } from './sandbox.ts';
@@ -36,6 +38,11 @@ const USAGE = `usage:
   rnship release approve build <sha> --platform <ios|android|all> [--profile production]
   rnship release approve submit <build-id> [--profile production]
   rnship release approve update <group-id> [--rollout 10] [--from-branch staging] [--channel production]
+  rnship release approve rollout <group-id> --percent <n>
+      moves a production rollout to the next step; judge the current step's health window first
+  rnship release approve rollback <group-id> [--to-embedded [--channel production]]
+      reverts the group's rollout, or with --to-embedded points the channel's clients on that
+      runtime back at the update embedded in their build (the rollback drill uses --channel staging)
       approvals run as your user (never rnship-agent) and refuse a digest that doesn't match the artifact
   rnship sandbox profile [--home <dir>]
   rnship sandbox run [--home <dir>] -- <command...>
@@ -43,6 +50,12 @@ const USAGE = `usage:
       an allowlisting localhost proxy
   rnship ota record <project-root> --out <dir> --build-id <id>
   rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]
+  rnship signals poll --app <name> --repo <app-repo> --sentry-org <slug> --sentry-project <slug>
+                      --validation <cmd>... [--at <ref>] [--tier T1] [--min-events 1] [--min-users 1]
+                      [--rolling-out <update-id>]... [--db <path>]
+      B1–B3: triage unresolved Sentry issues into Flow B tasks. Reads SENTRY_AUTH_TOKEN from env; run
+      it as its own job, never inside tick (executors inherit the tick's env). Suspect files must
+      exist at --at (default HEAD of the app repo)
   rnship tasks import <tasks.yaml> --app <name> --flow <A|B> --repo <app-repo> [--db <path>]
   rnship tasks list [--db <path>]
   rnship ledger [--db <path>]
@@ -104,6 +117,16 @@ async function main(argv: string[]): Promise<void> {
       platform: { type: 'string' },
       profile: { type: 'string' },
       rollout: { type: 'string' },
+      percent: { type: 'string' },
+      'to-embedded': { type: 'boolean' },
+      'sentry-org': { type: 'string' },
+      'sentry-project': { type: 'string' },
+      validation: { type: 'string', multiple: true },
+      at: { type: 'string' },
+      tier: { type: 'string' },
+      'min-events': { type: 'string' },
+      'min-users': { type: 'string' },
+      'rolling-out': { type: 'string', multiple: true },
       'from-branch': { type: 'string' },
       channel: { type: 'string' },
       home: { type: 'string' },
@@ -175,6 +198,11 @@ async function main(argv: string[]): Promise<void> {
       } else if (action === 'update') {
         const rollout = values.rollout === undefined ? undefined : Number(values.rollout);
         approved(releaseApproveUpdate(ctx, { group: digest, rollout, fromBranch: values['from-branch'], channel: values.channel }));
+      } else if (action === 'rollout') {
+        required(values, 'percent');
+        approved(releaseApproveRollout(ctx, { group: digest, percent: Number(values.percent) }));
+      } else if (action === 'rollback') {
+        approved(releaseApproveRollback(ctx, { group: digest, toEmbedded: values['to-embedded'], channel: values.channel }));
       } else {
         throw new UsageError(`unknown release action: ${action ?? '(none)'}`);
       }
@@ -203,6 +231,31 @@ async function main(argv: string[]): Promise<void> {
         policy: values.policy ? merged(values.policy) : undefined,
       });
       console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    case 'signals poll': {
+      required(values, 'app', 'repo', 'sentry-org', 'sentry-project');
+      if (!values.validation?.length) throw new UsageError('missing --validation: Flow B tasks need validation commands');
+      const tier = values.tier ?? 'T1';
+      if (!(TIERS as readonly string[]).includes(tier)) throw new UsageError(`--tier must be one of ${TIERS.join(', ')}`);
+      const repo = resolve(values.repo!);
+      const client = new SentryClient({ org: values['sentry-org']!, project: values['sentry-project']!, token: process.env.SENTRY_AUTH_TOKEN ?? '' });
+      const report = await pollSentry(
+        openDb(dbPath(values.db)),
+        client,
+        {
+          app: values.app!,
+          repo,
+          at: values.at ?? 'HEAD',
+          task: { tier: tier as Tier, validation: values.validation },
+          minEvents: values['min-events'] === undefined ? undefined : Number(values['min-events']),
+          minUsers: values['min-users'] === undefined ? undefined : Number(values['min-users']),
+          rollingOut: values['rolling-out'],
+          notify: desktopNotify,
+        },
+        new Date(),
+      );
+      console.log(JSON.stringify(report, null, 2));
       return;
     }
     case 'tasks import': {

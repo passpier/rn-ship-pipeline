@@ -16,6 +16,8 @@ Production steps never run in CI. You run them on the release Mac:
 - `rnship release approve build <sha> --platform all`
 - `rnship release approve submit <build-id>`
 - `rnship release approve update <staging-group-id> --rollout 10`
+- `rnship release approve rollout <production-group-id> --percent 25`, one step at a time
+- `rnship release approve rollback <group-id>` (or `--to-embedded --channel <channel>`)
 
 ## Caller example (`.github/workflows/rnship.yml` in the app repo)
 

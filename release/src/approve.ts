@@ -158,6 +158,58 @@ export function releaseApproveUpdate(
   return record(ctx, env, 'release', input.group, `republish ${input.group} (commit ${head}) to ${channel} at ${rollout}%`);
 }
 
+/** The update group's updates, checked to be that group and one runtime version. */
+function viewGroup(ctx: ApproveContext, run: Runner, group: string): EasUpdate[] {
+  const updates = json<EasUpdate[]>(run('eas', ['update:view', group, '--json'], query(ctx)));
+  if (!Array.isArray(updates) || updates.length === 0) throw new ApprovalError(`update group ${group} has no updates`);
+  for (const update of updates) if (update.group !== group) throw new ApprovalError(`eas returned group ${update.group}, not ${group}`);
+  if (new Set(updates.map((u) => u.runtimeVersion)).size !== 1) throw new ApprovalError(`update group ${group} spans more than one runtime version`);
+  return updates;
+}
+
+/**
+ * Moves a production rollout to the next percentage (design §5). Check the health window
+ * of the current step before you run it; an inconclusive window is yours to judge. Each
+ * step is its own single-use approval, recorded as `<group>@<percent>`.
+ */
+export function releaseApproveRollout(ctx: ApproveContext, input: { group: string; percent: number }): ApproveResult {
+  const { percent } = input;
+  if (!Number.isInteger(percent) || percent < 1 || percent > 100) throw new ApprovalError(`--percent must be an integer from 1 to 100, got ${percent}`);
+  const digest = `${input.group}@${percent}`;
+  const { run, env } = prepare(ctx, 'release', digest);
+  const [update] = viewGroup(ctx, run, input.group);
+  act(run('eas', ['update:edit', input.group, '--rollout-percentage', String(percent), '--non-interactive'], live(ctx)), 'eas update:edit');
+  return record(ctx, env, 'release', digest, `rollout of ${input.group} (branch ${update!.branch}) to ${percent}%`);
+}
+
+/**
+ * Rolls back a bad update group (design §5, recovery). By default it reverts the group's
+ * in-progress rollout; `toEmbedded` instead points the channel's clients on that runtime
+ * back at the update embedded in their build. Recorded as `rollback-<group>`, so the
+ * group's earlier release approval doesn't block it.
+ */
+export function releaseApproveRollback(ctx: ApproveContext, input: { group: string; toEmbedded?: boolean; channel?: string }): ApproveResult {
+  const digest = `rollback-${input.group}`;
+  const { run, env } = prepare(ctx, 'release', digest);
+  const [update] = viewGroup(ctx, run, input.group);
+  const message = `rnship release approve rollback ${input.group}`;
+  if (input.toEmbedded) {
+    const channel = input.channel ?? 'production';
+    act(
+      run(
+        'eas',
+        ['update:roll-back-to-embedded', '--channel', channel, '--runtime-version', update!.runtimeVersion, '--message', message, '--force-end-active-rollout', '--non-interactive'],
+        live(ctx),
+      ),
+      'eas update:roll-back-to-embedded',
+    );
+    return record(ctx, env, 'release', digest, `roll back ${channel} runtime ${update!.runtimeVersion} to embedded (from ${input.group})`);
+  }
+  if (input.channel !== undefined) throw new ApprovalError('--channel applies only with --to-embedded; a rollout revert acts on the group itself');
+  act(run('eas', ['update:revert-update-rollout', '--group', input.group, '--message', message, '--non-interactive'], live(ctx)), 'eas update:revert-update-rollout');
+  return record(ctx, env, 'release', digest, `revert the rollout of ${input.group} (branch ${update!.branch})`);
+}
+
 function prepare(ctx: ApproveContext, kind: ApprovalKind, digest: string) {
   const env = ctx.env ?? process.env;
   assertHumanUser(env);

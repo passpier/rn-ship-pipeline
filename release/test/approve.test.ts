@@ -224,11 +224,46 @@ describe('rnship release approve', () => {
     expect(s.calls()).toContainEqual(expect.stringMatching(/^eas update:republish --group group-1 --destination-channel production --rollout-percentage 10 /));
   });
 
+  it('rollout moves a group to a new percentage, once per step', () => {
+    const s = sandbox();
+    const env = { FAKE_EAS_UPDATE: updates(s.head, { branch: 'production' }) };
+    expect(s.rnship(['release', 'approve', 'rollout', 'group-1', '--percent', '25'], env).code).toBe(0);
+    expect(s.calls()).toContain('eas update:edit group-1 --rollout-percentage 25 --non-interactive');
+    expect(s.rnship(['release', 'approve', 'rollout', 'group-1', '--percent', '25'], env).code).toBe(1);
+    expect(s.rnship(['release', 'approve', 'rollout', 'group-1', '--percent', '50'], env).code).toBe(0);
+    expect(s.rnship(['release', 'approve', 'rollout', 'group-1', '--percent', '101'], env).code).toBe(1);
+  });
+
+  it('rollback reverts a rollout, or points the channel back at the embedded update', () => {
+    const s = sandbox();
+    // The group's own release approval doesn't block its rollback.
+    expect(s.rnship(['release', 'approve', 'update', 'group-1'], { FAKE_EAS_UPDATE: updates(s.head) }).code).toBe(0);
+    expect(s.rnship(['release', 'approve', 'rollback', 'group-1'], { FAKE_EAS_UPDATE: updates(s.head) }).code).toBe(0);
+    expect(s.calls()).toContainEqual(expect.stringMatching(/^eas update:revert-update-rollout --group group-1 --message .* --non-interactive$/));
+
+    const drill = s.rnship(['release', 'approve', 'rollback', 'group-2', '--to-embedded', '--channel', 'staging'], { FAKE_EAS_UPDATE: updates(s.head, { group: 'group-2' }) });
+    expect(drill.code).toBe(0);
+    expect(s.calls()).toContainEqual(expect.stringMatching(/^eas update:roll-back-to-embedded --channel staging --runtime-version 1 --message .* --force-end-active-rollout --non-interactive$/));
+  });
+
+  it('rollback refuses a group that spans runtimes, and --channel without --to-embedded', () => {
+    const s = sandbox();
+    const mixed = JSON.stringify([
+      { group: 'group-1', branch: 'production', platform: 'ios', runtimeVersion: '1' },
+      { group: 'group-1', branch: 'production', platform: 'android', runtimeVersion: '2' },
+    ]);
+    expect(s.rnship(['release', 'approve', 'rollback', 'group-1', '--to-embedded'], { FAKE_EAS_UPDATE: mixed }).code).toBe(1);
+    expect(s.rnship(['release', 'approve', 'rollback', 'group-1', '--channel', 'staging'], { FAKE_EAS_UPDATE: updates(s.head) }).code).toBe(1);
+    expect(s.calls().some((c) => /^eas update:(revert|roll-back)/.test(c))).toBe(false);
+  });
+
   it('refuses every release action as the agent user', () => {
     const s = sandbox();
     expect(s.rnship(['release', 'approve', 'build', s.head, '--platform', 'ios'], asAgent).code).toBe(1);
     expect(s.rnship(['release', 'approve', 'submit', 'build-1'], { ...asAgent, FAKE_EAS_BUILD: build() }).code).toBe(1);
     expect(s.rnship(['release', 'approve', 'update', 'group-1'], { ...asAgent, FAKE_EAS_UPDATE: updates(s.head) }).code).toBe(1);
+    expect(s.rnship(['release', 'approve', 'rollout', 'group-1', '--percent', '25'], { ...asAgent, FAKE_EAS_UPDATE: updates(s.head) }).code).toBe(1);
+    expect(s.rnship(['release', 'approve', 'rollback', 'group-1'], { ...asAgent, FAKE_EAS_UPDATE: updates(s.head) }).code).toBe(1);
     expect(s.calls()).toEqual([]);
   });
 });

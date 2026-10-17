@@ -16,6 +16,8 @@ rules:
         - "eas update:republish*production*"
         - "eas update:edit*"
         - "eas update:rollback*"
+        - "eas update:roll-back-to-embedded*"
+        - "eas update:revert-update-rollout*"
     approval: { binds_to: artifact_digest, ttl: single_use, evidence: [classifier_report, changelog] }
 
   - id: iap.pricing

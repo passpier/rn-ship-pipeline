@@ -39,6 +39,9 @@ rnship merge approve <sha> --pr <n>                    # PR head must equal <sha
 rnship release approve build <sha> --platform all      # clean checkout at <sha> → eas build --profile production
 rnship release approve submit <build-id>               # finished production build → eas submit
 rnship release approve update <group-id> --rollout 10  # staging group built from HEAD → production at 10%
+rnship release approve rollout <group-id> --percent 25 # next step (ota/rollout.yaml); judge the window first
+rnship release approve rollback <group-id>             # revert the group's rollout
+                       [--to-embedded --channel staging] # or point the channel back at the build's embedded update
 ```
 Each approval is digest-bound and single-use. Records go to `.rnship/state/approvals/`. Reusable PR-check and staging-OTA workflows: `release/README.md`.
 
@@ -87,6 +90,8 @@ rnship tick --executor ralphex --settings <executor-settings.json>        # the 
 rnship tasks list
 rnship ledger                                                             # usage per executor call: task, model that ran, tokens
 rnship task approve <task-id> <head-sha>                                  # run as you: approves gated changes at exactly that commit
+rnship signals poll --app <name> --repo <app-repo> --sentry-org <slug> --sentry-project <slug> --validation '<cmd>'
+                                                                          # Flow B: Sentry issues → structured triage → tasks; its own job, never in tick
 ```
 
 Each tick runs these steps:

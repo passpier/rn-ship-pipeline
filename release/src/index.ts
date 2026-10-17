@@ -17,6 +17,8 @@ export { canonicalJson, sha256 } from './digest.ts';
 export {
   mergeApprove,
   releaseApproveBuild,
+  releaseApproveRollback,
+  releaseApproveRollout,
   releaseApproveSubmit,
   releaseApproveUpdate,
   spawnRunner,

@@ -5,7 +5,10 @@ export { CLAUDE, park, quotaState, recordUsage, unpark, type QuotaState } from '
 export { desktopNotify, type Notice, type Notify } from './notify.ts';
 export { decide, type Decision } from './retry.ts';
 export { activeRun, getRun, type RunRow } from './runs.ts';
-export { ingestSignal, signalKey, type IngestResult, type Signal } from './signals.ts';
+export { ingestSignal, signalKey, type IngestResult, type Signal, type SignalTask } from './signals.ts';
+export { SentryClient, type Fetch, type SentryEvent, type SentryFrame, type SentryIssue, type SentryOptions } from './sentry.ts';
+export { pollSentry, type PollOptions, type PollReport } from './sentryPoll.ts';
+export { LEVELS, repoPath, suspectFrames, triage, TriageError, triageTaskBody, type Level, type SuspectFrame, type Triage, type TriageOptions } from './triage.ts';
 export { runStage, stageKey } from './stages.ts';
 export { ACTIVE_STATES, canTransition, getTask, STATES, transition, TransitionError, type State, type TaskRow } from './states.ts';
 export { importTasks, loadTasks, parseTasks, TasksFileSchema, type ImportResult, type TasksFile } from './tasks.ts';

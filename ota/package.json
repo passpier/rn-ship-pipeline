@@ -4,10 +4,13 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./rollout.yaml": "./rollout.yaml"
   },
   "dependencies": {
     "@expo/fingerprint": "^0.20.14",
-    "@rnship/policy": "workspace:*"
+    "@rnship/policy": "workspace:*",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   }
 }
