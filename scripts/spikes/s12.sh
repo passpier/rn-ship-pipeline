@@ -224,7 +224,7 @@ session_up() {
   sudo launchctl print "gui/$AGENT_UID" >/dev/null 2>&1 \
     && sudo test -e "$AGENT_HOME/Library/Keychains/login.keychain-db"
 }
-in_staff() { id -Gn "$AGENT" | tr ' ' '\n' | grep -qx staff; }
+in_staff() { id -Gn "$AGENT" | tr ' ' '\n' | grep -x staff >/dev/null; }
 
 # _env_dict prints the environment every job gets, as plist XML.
 _env_dict() {
@@ -375,7 +375,7 @@ stage "Preflight"
 [[ $EUID -ne 0 && "$(id -un)" != "$AGENT" ]] || fail "run this as your own macOS user"
 for c in jq git node npx xcodebuild xcrun pod sudo; do command -v "$c" >/dev/null || fail "missing $c"; done
 node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' || fail "need Node 24 (nvm use 24)"
-XCODE=$(xcodebuild -version | head -n1)
+XCODE=$(xcodebuild -version | sed -n 1p)
 record S12_XCODE "$XCODE"
 [[ $XCODE == "Xcode 26.3" ]] || warn "ADR 0003 assumes Xcode 26.3; this is $XCODE"
 RUNTIME=$(xcrun simctl list -j runtimes | jq -r '[.runtimes[] | select(.isAvailable and .platform == "iOS" and (.version | startswith("26.3")))][0].identifier // empty')
@@ -506,7 +506,7 @@ xcrun simctl install "$udid" "$app" || at install
 xcrun simctl launch "$udid" "$bid" || at launch
 sleep 10
 xcrun simctl io "$udid" screenshot "$HOME/s12-smoke-$label.png" || at screenshot
-xcrun simctl spawn "$udid" launchctl list | grep -q "$bid" || at exited
+xcrun simctl spawn "$udid" launchctl list | grep "$bid" >/dev/null || at exited
 echo "result=ok"
 SH
 chmod 755 "$SHARED"/*.sh
