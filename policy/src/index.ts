@@ -23,6 +23,7 @@ export {
   seatbeltProfile,
 } from './sandbox.ts';
 export { escalate, loadRouting, parseRouting, RoutingSchema, TIERS, type ModelSpec, type Routing, type Tier } from './routing.ts';
+export { capabilityVocabulary, loadSuitability, suitabilityHits, SuitabilitySchema, type Suitability, type SuitabilityHit } from './suitability.ts';
 export { parseCommand, type ParsedCommand, type SimpleCommand } from './shell.ts';
 export { CATEGORIES, EFFECT_ORDER, type Effect, type Match, type Policy, type Rule } from './schema.ts';
 

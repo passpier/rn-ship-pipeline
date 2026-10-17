@@ -91,7 +91,7 @@ How `claude-p` runs a batch:
 - **First failure stops the batch.** The first task that doesn't pass ends the batch, and the tasks before it count as done. That task's partial work, commits included, is saved as a patch and rolled back.
 
 ```sh
-rnship tasks import tasks.yaml --app <name> --flow A --repo <app-repo>   # idempotent
+rnship tasks import tasks.yaml --app <name> --flow B --repo <app-repo>   # idempotent; Flow A tasks come from rnship change tasks
 rnship tick --executor claude-p --settings <executor-settings.json>       # one pass; the LaunchAgent runs it every 15 min
 rnship tick --executor ralphex --settings <executor-settings.json>        # the same, through ralphex; add --plugin-dir plugins/rn-game for game apps
 rnship tasks list
@@ -110,6 +110,27 @@ Each tick runs these steps:
 
 Every live executor starts Claude through `orchestrator/bin/claude-shim.ts` (with ralphex, as `claude_command`). The shim stops any session whose `system/init` doesn't list the guard plugin, or reports another model than the pinned `--model`. It keeps the stream-json transcripts, which carry usage, denials, and reset times. The ledger records usage and the model that ran once per task with `claude-p`, and once per batch with ralphex, which can't split usage by task.
 
+## Flow A: change intake (`rnship change`)
+Every feature after the Stage 0 skeleton enters as a change folder in the app repo, `.rnship/changes/<id>/`. You write `change-request.yaml`: the goal, the areas, the platforms, and acceptance criteria shaped as when/then, each marked user-facing or not. Research is cited by path and sha256 and is never read into a prompt.
+
+```sh
+rnship change intake <dir> --repo <app-repo> --settings <executor-settings.json>   # as rnship-agent: A1–A4
+rnship change status <dir> --repo <app-repo>                                       # read this before approving
+rnship change approve <dir> <digest> [--baseline <approved-baseline.yaml>]          # as you
+rnship change tasks <dir> --app <name> --repo <app-repo> --settings <file> --validation '<cmd>' --app-id <bundle-id>
+```
+
+- **A1** checks the request against its schema. Each research file must exist with its recorded hash, and no free-text field may copy a line of it.
+- **A2** makes one tool-less `claude -p --json-schema` call that only *proposes* capabilities, packages and Expo config. The gate decides deterministically. A suitability rule (`policy/suitability.yaml`, for example CarPlay) gives `stop` and cites its rule ID. A package install or a native config change gives `go-dev-build`. Anything else gives `go`. The SDK's own `bundledNativeModules.json` version wins over the model's.
+- **A3** writes whatever the change needs beyond the approved baseline to `baseline-delta.yaml`. The policy gates that delta fires (`permissions.native`, `deps.upgrade`, …) are listed in `impact.json`.
+- **A4** designs `screens.yaml`: routes with their loading, empty and error states and a11y labels. Every acceptance criterion maps to a route.
+- **A4b** is `rnship change approve`, which binds to the digest of the scope files. Any later edit voids the approval. With a baseline delta, the same command merges the delta into your baseline and approves it.
+- **A5** writes `tasks/tasks.yaml` and Maestro flows (`tasks/smoke/*.yaml`, rendered by rnship, so every flow parses). Validation commands come from `--validation`, never from the model. It imports the tasks into a Flow A run bound to the change.
+
+Each stage call reuses its recorded answer while its inputs are unchanged. A stage whose answer fails its lint gets one retry, then goes to you.
+
+Tick leases a Flow A run's tasks only while its gate passes: the change folder still has the imported digest, your change approval matches it, and any baseline delta is in the repo's approved baseline. A failing gate holds the run and notifies you once. Before the first task, tick prepares the worktree outside Claude. It runs `npx expo install` for the approved packages under the validation sandbox, so package.json and the lockfile change together, copies in the smoke flows and the approved baseline, and commits.
+
 Retries follow the failure class: a validation failure retries at the same tier, then one tier up (`policy/routing.yaml`), then goes to you. A failed task whose session had tool calls denied goes to you at once, with the denials in its digest, since no retry or bigger model lifts a denial. A gated change waits for `rnship task approve`, and a new commit invalidates that approval.
 
 ## Layout
@@ -120,6 +141,6 @@ Retries follow the failure class: a validation failure retries at the same tier,
 - `plugins/rn-game/`: an optional knowledge plugin for building 2D games in Expo apps (skill `rn-2d-game`). It's listed in `.claude-plugin/marketplace.json`, so other projects can install it with `/plugin install rn-game --marketplace passpier/rn-ship-pipeline`.
 - `orchestrator/`: state machine, tick, ledger, signal and stage dedup, and executor adapters
 - `cli/`: the `rnship` bin, policy check, and the sandbox runner
-- `fixtures/`: the made-up Expo app used by tests
+- `fixtures/`: the made-up Expo app used by tests, and the M5 change folders (`fixtures/changes/`)
 - `.github/workflows/release-*.yml`: the reusable workflows
 - `docs/adr/`: decision records

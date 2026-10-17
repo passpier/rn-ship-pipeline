@@ -1,0 +1,17 @@
+version: 1
+id: settings-screen
+goal: Players can turn game sounds on and off from a settings screen.
+areas: [navigation, settings]
+platforms: [ios, android]
+acceptance_criteria:
+  - id: open-settings
+    when: the player taps the gear button on the home screen
+    then: a Settings screen opens with a Sound switch
+    user_facing: true
+  - id: toggle-sound
+    given: the Settings screen is open
+    when: the player turns the Sound switch off
+    then: the switch shows off, and it is still off after the app restarts
+    user_facing: true
+data_impact: local
+monetization_impact: none

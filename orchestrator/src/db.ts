@@ -8,7 +8,16 @@ import { DatabaseSync } from 'node:sqlite';
 
 export type Db = DatabaseSync;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+
+// Each entry moves the schema from its index + 1 to the next version.
+const MIGRATIONS = [
+  // 1 → 2 (M5): Flow A runs are bound to an approved change, held while its gate fails, and prepared once.
+  `ALTER TABLE runs ADD COLUMN change_dir TEXT;
+   ALTER TABLE runs ADD COLUMN change_digest TEXT;
+   ALTER TABLE runs ADD COLUMN hold TEXT;
+   ALTER TABLE runs ADD COLUMN prepared_at TEXT;`,
+];
 
 const SCHEMA = `
 CREATE TABLE runs (
@@ -20,6 +29,10 @@ CREATE TABLE runs (
   base_sha TEXT NOT NULL,
   branch TEXT,
   worktree TEXT,
+  change_dir TEXT,
+  change_digest TEXT,
+  hold TEXT,
+  prepared_at TEXT,
   created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX one_active_run ON runs (app, flow) WHERE status = 'active';
@@ -113,6 +126,11 @@ export function openDb(path: string): Db {
   if (version === 0) {
     transaction(db, () => {
       db.exec(SCHEMA);
+      db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    });
+  } else if (version < SCHEMA_VERSION) {
+    transaction(db, () => {
+      for (const migration of MIGRATIONS.slice(version - 1)) db.exec(migration);
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     });
   } else if (version !== SCHEMA_VERSION) {

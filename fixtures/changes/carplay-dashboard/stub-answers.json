@@ -1,0 +1,5 @@
+{
+  "propose": [
+    { "capabilities": ["carplay"], "dependencies": { "react-native-carplay": "2.4.1" }, "config": {}, "native": true, "store_review_risk": "high" }
+  ]
+}

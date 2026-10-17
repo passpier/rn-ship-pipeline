@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { transaction, type Db } from './db.ts';
 import { activeRun } from './runs.ts';
 
-// The M2 subset of `tasks.yaml` (A5/B3 output). Smoke flows and risk tags come with M4/M5.
+// `tasks.yaml` (A5/B3 output). A Flow A file names the change it implements and the
+// scope digest you approved; acceptance criteria, smoke flows and risk tags are A5's.
 
 const TaskSchema = z
   .object({
@@ -17,10 +18,19 @@ const TaskSchema = z
     validation: z.array(z.string()).min(1, 'every task needs validation commands'),
     native: z.boolean().default(false),
     body: z.string().default(''),
+    acceptance_criteria: z.array(z.string()).optional(),
+    smoke_flows: z.array(z.string()).optional(),
+    risk: z.array(z.string()).optional(),
   })
   .strict();
 
-export const TasksFileSchema = z.object({ version: z.literal(1), tasks: z.array(TaskSchema).min(1) }).strict();
+export const TasksFileSchema = z
+  .object({
+    version: z.literal(1),
+    change: z.object({ id: z.string().min(1), digest: z.string().regex(/^sha256:[0-9a-f]{64}$/) }).strict().optional(),
+    tasks: z.array(TaskSchema).min(1),
+  })
+  .strict();
 export type TasksFile = z.infer<typeof TasksFileSchema>;
 
 export function parseTasks(yamlText: string): TasksFile {
@@ -72,7 +82,11 @@ export type ImportResult = { runId: number; created: string[]; existing: string[
  * Adds the tasks to the active run for (app, flow). Idempotent: a task whose id is already
  * in the run is left as it is, so re-running an import after a crash adds nothing.
  */
-export function importTasks(db: Db, input: { app: string; flow: 'A' | 'B'; repo: string; file: TasksFile }, now: Date): ImportResult {
+export function importTasks(
+  db: Db,
+  input: { app: string; flow: 'A' | 'B'; repo: string; file: TasksFile; change?: { dir: string; digest: string } },
+  now: Date,
+): ImportResult {
   return transaction(db, () => {
     const run = activeRun(db, input, now);
     const at = now.toISOString();

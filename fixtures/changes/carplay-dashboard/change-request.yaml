@@ -1,0 +1,12 @@
+version: 1
+id: carplay-dashboard
+goal: Drivers see their tank's fish count on the CarPlay dashboard.
+areas: [carplay]
+platforms: [ios]
+acceptance_criteria:
+  - id: dashboard
+    when: the phone connects to CarPlay
+    then: the dashboard shows a tile with the fish count
+    user_facing: true
+data_impact: none
+monetization_impact: none

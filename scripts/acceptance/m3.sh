@@ -590,7 +590,7 @@ export PATH="$AGENT_PATH"
 export RNSHIP_STATE_DIR="$STATE"
 export RNSHIP_DB="\$HOME/.rnship/m3-\$adapter/orchestrator.db"
 cd "\$HOME" || exit 1
-rnship tasks import "\$2" --app "m3-\$adapter" --flow A --repo "\$HOME/apps/m3-\$adapter" || exit 1
+rnship tasks import "\$2" --app "m3-\$adapter" --flow A --unscoped --repo "\$HOME/apps/m3-\$adapter" || exit 1
 if [ "\$adapter" = ralphex ]; then set -- --ralphex "$SHARED/bin/ralphex"; else set --; fi
 rnship tick --executor "\$adapter" --settings "$SHARED/build/executor-settings.json" "\$@"
 echo "tick exit=\$?"

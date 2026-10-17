@@ -18,11 +18,19 @@
 // writes in the worktree, Bash, and (ralphex) the plan file, they're denied and it gives up.
 // Prompts that start with `# rnship task: <key>` (the claude-p adapter) get the work done
 // for that key and the signal in the final result, as a real session would end.
+// Prompts that start with `# rnship intake: <stage>` (Flow A's single calls) get the next
+// answer from `intake[<stage>]` as `structured_output`, or `"limit"` for the five-hour limit.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
-type Scenario = { init?: 'ok' | 'no_plugin' | 'plugin_error'; calls?: string[]; resetsAt?: number; permissions?: 'enforce' };
+type Scenario = {
+  init?: 'ok' | 'no_plugin' | 'plugin_error';
+  calls?: string[];
+  resetsAt?: number;
+  permissions?: 'enforce';
+  intake?: Record<string, unknown[]>;
+};
 
 const scenarioPath = process.env.STUB_SCENARIO!;
 const scenario = JSON.parse(readFileSync(scenarioPath, 'utf8')) as Scenario;
@@ -51,6 +59,22 @@ emit({
   stub_argv: argv,
   stub_prompt: prompt,
 });
+
+const intakeStage = /^# rnship intake: (\S+)/.exec(prompt)?.[1];
+if (intakeStage) {
+  const answers = scenario.intake?.[intakeStage] ?? [];
+  const countFile = `${scenarioPath}.${intakeStage}.count`;
+  const i = existsSync(countFile) ? Number(readFileSync(countFile, 'utf8')) : 0;
+  writeFileSync(countFile, String(i + 1));
+  const answer = answers[Math.min(i, answers.length - 1)];
+  if (answer === 'limit') {
+    emit({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: scenario.resetsAt } });
+    emit({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your session limit · resets 3pm", api_error_status: 429 });
+    process.exit(1);
+  }
+  result({ result: JSON.stringify(answer ?? {}), structured_output: answer });
+  process.exit(0);
+}
 
 const taskKey = /^# rnship task: (\S+)/.exec(prompt)?.[1];
 const planPath = /Read the plan file at (\S+?\.md)/.exec(prompt)?.[1];

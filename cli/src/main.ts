@@ -19,7 +19,8 @@ import {
   writeApproval,
   type ApproveResult,
 } from '@rnship/release';
-import { importTasks, loadTasks, openDb, pollSentry, SentryClient, tick } from '@rnship/orchestrator';
+import { changeDigest, changePreparer, changeStatus, importTasks, loadRequest, loadTasks, openDb, pollSentry, SentryClient, tick } from '@rnship/orchestrator';
+import { changeApprove, changeIntake, changeTasks, sandboxInstall } from './change.ts';
 import { policyCheck } from './check.ts';
 import { dbPath, desktopNotify, ledgerRows, makeExecutor, orchestratorHome, policyDiffCheck, sandboxValidate, taskApprove } from './orchestrate.ts';
 import { sandboxRun } from './sandbox.ts';
@@ -56,7 +57,22 @@ const USAGE = `usage:
       B1–B3: triage unresolved Sentry issues into Flow B tasks. Reads SENTRY_AUTH_TOKEN from env; run
       it as its own job, never inside tick (executors inherit the tick's env). Suspect files must
       exist at --at (default HEAD of the app repo)
-  rnship tasks import <tasks.yaml> --app <name> --flow <A|B> --repo <app-repo> [--db <path>]
+  rnship change intake <change-dir> --repo <app-repo> --settings <executor-settings.json> [--tier T1] [--db <path>]
+      A1–A4 for .rnship/changes/<id>/change-request.yaml: checks the request, asks Claude what it needs,
+      decides go / go-dev-build / stop against the approved baseline, and designs the screens
+  rnship change status <change-dir> --repo <app-repo>
+      the verdict, rule hits, baseline delta and packages to install, the digest, and whether it's approved
+  rnship change approve <change-dir> <digest> [--baseline <approved-baseline.yaml>] [--project <root>]
+      run as you: approves the change folder at exactly that digest (any later edit voids it). With a
+      baseline delta, also merges it into --baseline (default <project>/.rnship/approved-baseline.yaml)
+      and approves that baseline; the agent's repo needs that file before tick leases any task
+  rnship change tasks <change-dir> --app <name> --repo <app-repo> --settings <executor-settings.json>
+                      --validation <cmd>... --app-id <bundle-id> [--tier T1] [--db <path>]
+      A5 for an approved change: tasks.yaml and Maestro flows under <change-dir>/tasks/, imported into
+      a Flow A run bound to the change; tick holds the run whenever the change's gate fails
+  rnship tasks import <tasks.yaml> --app <name> --flow <A|B> --repo <app-repo> [--change <change-dir> | --unscoped] [--db <path>]
+      a Flow A file names its change: pass --change, which must still have the file's digest.
+      --unscoped imports Flow A tasks with no change (fixture plans only, as in the M3 acceptance)
   rnship tasks list [--db <path>]
   rnship ledger [--db <path>]
       every executor call: task, model that ran, tokens (input + output)
@@ -141,6 +157,9 @@ async function main(argv: string[]): Promise<void> {
       settings: { type: 'string' },
       review: { type: 'boolean' },
       'plugin-dir': { type: 'string', multiple: true },
+      change: { type: 'string' },
+      unscoped: { type: 'boolean' },
+      'app-id': { type: 'string' },
     },
   });
 
@@ -265,9 +284,54 @@ async function main(argv: string[]): Promise<void> {
       if (!positionals[0]) throw new UsageError('missing <tasks.yaml>');
       required(values, 'app', 'flow', 'repo');
       if (values.flow !== 'A' && values.flow !== 'B') throw new UsageError('--flow must be A or B');
-      const db = openDb(dbPath(values.db));
       const file = loadTasks(positionals[0]);
-      console.log(JSON.stringify(importTasks(db, { app: values.app!, flow: values.flow, repo: resolve(values.repo!), file }, new Date()), null, 2));
+      let change: { dir: string; digest: string } | undefined;
+      if (file.change) {
+        if (!values.change) throw new UsageError(`${positionals[0]} implements change ${file.change.id}: pass --change <change-dir>`);
+        const dir = resolve(values.change);
+        const digest = changeDigest(dir);
+        if (loadRequest(dir).id !== file.change.id || digest !== file.change.digest) {
+          throw new Error(`${dir} is change ${loadRequest(dir).id} at ${digest}, not ${file.change.id} at ${file.change.digest}`);
+        }
+        change = { dir, digest };
+      } else if (values.flow === 'A' && !values.unscoped) {
+        throw new UsageError('Flow A tasks come from rnship change tasks; pass --unscoped only for a fixture plan');
+      }
+      const db = openDb(dbPath(values.db));
+      console.log(JSON.stringify(importTasks(db, { app: values.app!, flow: values.flow, repo: resolve(values.repo!), file, change }, new Date()), null, 2));
+      return;
+    }
+    case 'change intake': {
+      if (!positionals[0]) throw new UsageError('missing <change-dir>');
+      required(values, 'repo');
+      const report = await changeIntake(resolve(positionals[0]), resolve(values.repo!), { db: dbPath(values.db), settings: values.settings, tier: values.tier, pluginDirs: values['plugin-dir'] });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.verdict === 'stop') process.exitCode = 3;
+      return;
+    }
+    case 'change status': {
+      if (!positionals[0]) throw new UsageError('missing <change-dir>');
+      required(values, 'repo');
+      console.log(JSON.stringify(changeStatus(resolve(positionals[0]), resolve(values.repo!)), null, 2));
+      return;
+    }
+    case 'change approve': {
+      const [dir, digest] = positionals;
+      if (!dir || !digest) throw new UsageError('missing <change-dir> <digest>');
+      const records = changeApprove({ dir: resolve(dir), digest, baseline: values.baseline, project: values.project ?? process.cwd() });
+      console.log(`approved change ${digest}\n${records.join('\n')}`);
+      return;
+    }
+    case 'change tasks': {
+      if (!positionals[0]) throw new UsageError('missing <change-dir>');
+      required(values, 'app', 'repo', 'app-id');
+      if (!values.validation?.length) throw new UsageError('missing --validation: every task needs validation commands');
+      const report = await changeTasks(
+        resolve(positionals[0]),
+        { app: values.app!, repo: resolve(values.repo!), validation: values.validation, appId: values['app-id']! },
+        { db: dbPath(values.db), settings: values.settings, tier: values.tier, pluginDirs: values['plugin-dir'] },
+      );
+      console.log(JSON.stringify({ change: report.change, digest: report.digest, tasks: report.tasksPath, flows: report.flows, run: report.runId, created: report.created }, null, 2));
       return;
     }
     case 'tasks list': {
@@ -296,6 +360,7 @@ async function main(argv: string[]): Promise<void> {
         routing: loadRouting(),
         diffCheck: policyDiffCheck,
         validate: sandboxValidate,
+        prepare: changePreparer(sandboxInstall),
         notify: desktopNotify,
         home,
         batchSize: values.batch === undefined ? undefined : Number(values.batch),

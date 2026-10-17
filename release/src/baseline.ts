@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { ProjectState } from '@rnship/policy';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { canonicalJson, sha256 } from './digest.ts';
 
@@ -28,6 +28,10 @@ export function parseBaseline(yamlText: string): Baseline {
 
 export function loadBaseline(path: string): Baseline {
   return parseBaseline(readFileSync(path, 'utf8'));
+}
+
+export function stringifyBaseline(baseline: Baseline): string {
+  return stringify(baseline);
 }
 
 /** Digest of the parsed baseline, so formatting and key order don't matter. */

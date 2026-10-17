@@ -48,6 +48,8 @@ export type StreamSummary = {
   /** The last `result` event's text and subtype (e.g. `success`, `error_max_turns`). */
   resultText?: string;
   resultSubtype?: string;
+  /** The last `result` event's `structured_output` (a `--json-schema` session). */
+  structuredOutput?: unknown;
 };
 
 type Event = Record<string, unknown>;
@@ -128,6 +130,7 @@ export function summarize(text: string): StreamSummary {
       if (event.is_error === true && typeof event.result === 'string') summary.errors.push(event.result);
       summary.resultText = typeof event.result === 'string' ? event.result : undefined;
       summary.resultSubtype = typeof event.subtype === 'string' ? event.subtype : undefined;
+      summary.structuredOutput = event.structured_output;
     }
   }
   return summary;
@@ -146,5 +149,6 @@ export function combine(summaries: StreamSummary[]): StreamSummary {
     errors: summaries.flatMap((s) => s.errors),
     resultText: summaries.findLast((s) => s.resultText !== undefined)?.resultText,
     resultSubtype: summaries.findLast((s) => s.resultSubtype !== undefined)?.resultSubtype,
+    structuredOutput: summaries.findLast((s) => s.structuredOutput !== undefined)?.structuredOutput,
   };
 }

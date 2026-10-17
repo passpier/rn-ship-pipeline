@@ -1,0 +1,16 @@
+version: 1
+id: tank-photo
+goal: Players can take a photo with the camera and use it as the tank background.
+areas: [tank, camera]
+platforms: [ios, android]
+acceptance_criteria:
+  - id: take-photo
+    when: the player taps Take photo on the tank screen and allows camera access
+    then: the camera opens, and the captured photo becomes the tank background
+    user_facing: true
+  - id: denied
+    when: the player denies camera access
+    then: the tank keeps its background and shows how to allow access in Settings
+    user_facing: true
+data_impact: local
+monetization_impact: none

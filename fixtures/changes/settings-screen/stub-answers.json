@@ -1,0 +1,31 @@
+{
+  "propose": [
+    { "capabilities": ["local-storage"], "dependencies": { "@react-native-async-storage/async-storage": "2.2.0" }, "config": {}, "native": false, "store_review_risk": "low" }
+  ],
+  "design": [
+    {
+      "version": 1,
+      "routes": [
+        {
+          "path": "/settings",
+          "title": "Settings",
+          "acceptance_criteria": ["open-settings", "toggle-sound"],
+          "states": { "loading": "A spinner while the saved setting loads", "empty": "Sound shows on, the default", "error": "Sound shows on and a note says the setting couldn't be read" },
+          "a11y_labels": ["Sound", "Back"]
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "tasks": [
+        { "id": "sound-setting", "title": "Persist the sound setting", "tier": "T1", "deps": [], "files": ["src/settings/sound.ts"], "native": false, "body": "Store the Sound on/off flag in AsyncStorage; default on.", "acceptance_criteria": ["toggle-sound"], "smoke_flows": ["toggle-sound"], "risk": ["data-loss"] },
+        { "id": "settings-route", "title": "Add the Settings screen and the gear button", "tier": "T1", "deps": ["sound-setting"], "files": ["app/settings.tsx", "app/index.tsx"], "native": false, "body": "Gear button with testID gear on home opens /settings with a Sound switch (testID sound-switch).", "acceptance_criteria": ["open-settings", "toggle-sound"], "smoke_flows": ["open-settings", "toggle-sound"], "risk": [] }
+      ],
+      "flows": [
+        { "name": "open-settings", "acceptance_criteria": ["open-settings"], "steps": [ { "command": "launchApp" }, { "command": "tapOn", "id": "gear" }, { "command": "assertVisible", "text": "Sound" } ] },
+        { "name": "toggle-sound", "acceptance_criteria": ["toggle-sound"], "steps": [ { "command": "launchApp" }, { "command": "tapOn", "id": "gear" }, { "command": "tapOn", "id": "sound-switch" }, { "command": "launchApp" }, { "command": "tapOn", "id": "gear" }, { "command": "assertVisible", "text": "Off" } ] }
+      ]
+    }
+  ]
+}

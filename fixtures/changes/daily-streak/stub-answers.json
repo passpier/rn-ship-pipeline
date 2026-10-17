@@ -1,0 +1,19 @@
+{
+  "propose": [
+    { "capabilities": ["local-storage"], "dependencies": {}, "config": {}, "native": false, "store_review_risk": "low" }
+  ],
+  "design": [
+    {
+      "version": 1,
+      "routes": [
+        {
+          "path": "/",
+          "title": "Home",
+          "acceptance_criteria": ["streak", "reset"],
+          "states": { "loading": "The streak badge shows a placeholder", "empty": "No badge before the first feeding", "error": "The badge hides if the history can't be read" },
+          "a11y_labels": ["Feeding streak"]
+        }
+      ]
+    }
+  ]
+}

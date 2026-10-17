@@ -1,0 +1,22 @@
+# Suitability rules for Flow A's change-impact gate (design §2 A2). A change whose proposal
+# names one of these capabilities or packages gets `stop`: a managed Expo app can't ship it,
+# or it needs entitlements and native targets outside this pipeline. Overriding a stop
+# needs an ADR plus your approval. `capabilities` is also the vocabulary the A2 prompt
+# offers the model, together with `known`.
+version: 1
+known: [camera, photo-library, location, push-notifications, haptics, audio, local-storage, network, in-app-purchase, ads, analytics]
+rules:
+  - id: suitability.carplay
+    reason: CarPlay needs an Apple entitlement and native CarPlay templates, outside managed Expo.
+    capabilities: [carplay]
+    deps: ["react-native-carplay", "@*/react-native-carplay"]
+  - id: suitability.android-auto
+    reason: Android Auto needs a car app service and Google's review, outside managed Expo.
+    capabilities: [android-auto]
+    deps: ["react-native-android-auto", "@*/react-native-android-auto"]
+  - id: suitability.watch-app
+    reason: A watchOS or Wear OS app is a separate native target.
+    capabilities: [watch-app, wear-os-app]
+  - id: suitability.app-clip
+    reason: App Clips and Instant Apps are separate native targets with their own size limits.
+    capabilities: [app-clip, instant-app]

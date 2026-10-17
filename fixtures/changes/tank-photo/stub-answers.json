@@ -1,0 +1,35 @@
+{
+  "propose": [
+    {
+      "capabilities": ["camera"],
+      "dependencies": { "expo-camera": "~55.0.0" },
+      "config": { "ios": { "infoPlist": { "NSCameraUsageDescription": "Take a photo for your tank background." } }, "plugins": ["expo-camera"] },
+      "native": true,
+      "store_review_risk": "low"
+    }
+  ],
+  "design": [
+    {
+      "version": 1,
+      "routes": [
+        {
+          "path": "/tank/photo",
+          "title": "Tank photo",
+          "acceptance_criteria": ["take-photo", "denied"],
+          "states": { "loading": "The camera preview starts", "empty": "The tank keeps its current background", "error": "A note explains how to allow camera access in Settings" },
+          "a11y_labels": ["Take photo", "Use photo", "Cancel"]
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "tasks": [
+        { "id": "photo-screen", "title": "Camera screen that sets the tank background", "tier": "T1", "deps": [], "files": ["app/tank/photo.tsx", "src/tank/background.ts"], "native": false, "body": "Use expo-camera; testIDs take-photo and use-photo.", "acceptance_criteria": ["take-photo", "denied"], "smoke_flows": ["denied-camera"], "risk": ["permissions"] }
+      ],
+      "flows": [
+        { "name": "denied-camera", "acceptance_criteria": ["take-photo", "denied"], "steps": [ { "command": "launchApp" }, { "command": "tapOn", "id": "take-photo" }, { "command": "assertVisible", "text": "Settings" } ] }
+      ]
+    }
+  ]
+}

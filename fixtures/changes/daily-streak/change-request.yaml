@@ -1,0 +1,20 @@
+version: 1
+id: daily-streak
+goal: The home screen shows how many days in a row the player has fed the fish.
+areas: [home, progress]
+platforms: [ios, android]
+acceptance_criteria:
+  - id: streak
+    given: the player fed the fish on each of the last three days
+    when: the player opens the app
+    then: the home screen shows a 3 day streak
+    user_facing: true
+  - id: reset
+    when: a day passes without feeding
+    then: the streak starts again from zero
+    user_facing: false
+data_impact: local
+monetization_impact: none
+research:
+  - path: .rnship/changes/daily-streak/research/notes.md
+    sha256: c1a171fb15ebd9ee7e4b24940712aa8893eb8b134be82c877eed055cec0e06ee

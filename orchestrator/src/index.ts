@@ -31,3 +31,23 @@ export {
   summarize,
   type StreamSummary,
 } from './streamJson.ts';
+export { changeDigest, checkRequest, FILES as CHANGE_FILES, IntakeError, loadDelta, loadImpact, loadRequest, loadScreens, researchLines } from './intake/folder.ts';
+export { applyDelta, baselineCovers, deltaIsEmpty, impactGate, type GateInput, type GateResult } from './intake/impact.ts';
+export { changeStatus, checkFlow, lintPlan, lintScreens, planChange, renderFlow, runIntake, scopeApproved, type IntakeInput, type IntakeReport, type PlanInput, type PlanReport, type ScopeCheck } from './intake/intake.ts';
+export { BASELINE_FILE, changePreparer, checkChangeGate, type ChangeGate, type GateCheck, type Installer, type Prepare } from './intake/gate.ts';
+export { designPrompt, proposePrompt, STAGES, tasksPrompt, type Stage } from './intake/prompts.ts';
+export { claudeStageRunner, StageError, stageArgs, type StageOptions, type StageRunner } from './intake/stage.ts';
+export {
+  BaselineDeltaSchema,
+  ChangeRequestSchema,
+  ImpactSchema,
+  PlanSchema,
+  ProposalSchema,
+  ScreensSchema,
+  type BaselineDelta,
+  type ChangeRequest,
+  type Impact,
+  type Plan,
+  type Proposal,
+  type Screens,
+} from './intake/schema.ts';

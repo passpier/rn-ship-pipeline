@@ -3,11 +3,12 @@ import { join } from 'node:path';
 import type { Routing, Tier } from '@rnship/policy';
 import { findApproval, stateDir } from '@rnship/release';
 import { transaction, type Db } from './db.ts';
+import { changePreparer, checkChangeGate, type ChangeGate, type Prepare } from './intake/gate.ts';
 import { NO_USAGE, type ExecResult, type ExecStatus, type Executor } from './executor.ts';
 import { park, quotaState, recordUsage, unpark } from './ledger.ts';
 import type { Notify } from './notify.ts';
 import { decide } from './retry.ts';
-import { getRun } from './runs.ts';
+import { getRun, type RunRow } from './runs.ts';
 import { ACTIVE_STATES, getTask, logEvent, patchTask, transition, type State, type TaskRow } from './states.ts';
 import { diffSince, ensureWorktree, headSha, resetWorktree } from './worktree.ts';
 
@@ -18,7 +19,8 @@ import { diffSince, ensureWorktree, headSha, resetWorktree } from './worktree.ts
 //   2. reopen the Claude quota when it resets, probing only when the reset time is unknown
 //   3. move due quota_parked / retry_wait tasks back to ready, and pending tasks whose deps are done
 //   4. continue tasks whose approval matches their current head
-//   5. lease a same-tier batch, run the executor, validate, diff-check, and repeat until idle
+//   5. hold Flow A runs whose change gate fails, and prepare each newly passing run once
+//   6. lease a same-tier batch, run the executor, validate, diff-check, and repeat until idle
 
 export type Gate = { ruleId: string; matches: string[] };
 /** The authoritative diff check (`rnship policy check`) over `baseRef..HEAD` in the worktree. */
@@ -34,6 +36,10 @@ export type TickOptions = {
   diffCheck: DiffCheck;
   validate: Validate;
   notify: Notify;
+  /** Flow A's change_scope gate (default: the change folder in the app repo, checkChangeGate). */
+  changeGate?: ChangeGate;
+  /** Prepares a Flow A run's worktree once its gate passes (default: no installer, so a change that installs packages is held). */
+  prepare?: Prepare;
   /** Orchestrator home: worktrees/ and bundles/ live here. */
   home: string;
   now?: () => Date;
@@ -62,7 +68,8 @@ export async function tick(opts: TickOptions): Promise<TickReport> {
       await reopenQuota(ctx);
       releaseDue(ctx);
       await continueApproved(ctx);
-      const batch = leaseBatch(ctx);
+      const held = await gateRuns(ctx);
+      const batch = leaseBatch(ctx, held);
       if (!batch) break;
       batches.push(await runBatch(ctx, batch));
     }
@@ -74,9 +81,14 @@ export async function tick(opts: TickOptions): Promise<TickReport> {
 
 type Ctx = Required<Omit<TickOptions, 'maxBatches'>>;
 
+const noInstaller = changePreparer(async () => ({ ok: false, digest: 'tick has no installer configured' }));
+
 function context(opts: TickOptions): Ctx {
+  const env = opts.env ?? process.env;
   return {
     ...opts,
+    changeGate: opts.changeGate ?? ((run) => checkChangeGate(run, env)),
+    prepare: opts.prepare ?? noInstaller,
     now: opts.now ?? (() => new Date()),
     env: opts.env ?? process.env,
     pid: opts.pid ?? process.pid,
@@ -192,18 +204,54 @@ export function approvalSubject(runId: number): string {
   return `run ${runId}`;
 }
 
-// 5. One batch: ready tasks of one run with the same tier and phase, highest priority
+// 5. A Flow A run is leased only while its change, exactly as approved, passes the gate
+// (an edit after `rnship change approve` holds it), and only after its worktree was
+// prepared once. A hold is notified when its reason changes, not on every tick.
+async function gateRuns(ctx: Ctx): Promise<Set<number>> {
+  const held = new Set<number>();
+  const runs = ctx.db
+    .prepare(
+      `SELECT * FROM runs r WHERE r.status = 'active' AND r.change_dir IS NOT NULL
+         AND EXISTS (SELECT 1 FROM tasks t WHERE t.run_id = r.id AND t.state = 'ready') ORDER BY r.id`,
+    )
+    .all() as RunRow[];
+  for (const run of runs) {
+    let check = ctx.changeGate(run);
+    if (check.ok && !run.prepared_at) {
+      const worktree = ensureWorktree(ctx.db, run, join(ctx.home, 'worktrees'));
+      try {
+        check = await ctx.prepare({ run: getRun(ctx.db, run.id), worktree });
+      } catch (error) {
+        check = { ok: false, reason: `preparing the worktree failed: ${String(error)}` };
+      }
+      if (check.ok) ctx.db.prepare('UPDATE runs SET prepared_at = ? WHERE id = ?').run(ctx.now().toISOString(), run.id);
+      else resetWorktree(worktree, { patchPath: join(ctx.home, 'bundles', `run-${run.id}`, `prepare-${Date.now()}.patch`) });
+    }
+    const reason = check.ok ? null : check.reason;
+    if (!check.ok) held.add(run.id);
+    if (run.hold === reason) continue;
+    ctx.db.prepare('UPDATE runs SET hold = ? WHERE id = ?').run(reason, run.id);
+    if (reason) {
+      const ready = ctx.db.prepare("SELECT id FROM tasks WHERE run_id = ? AND state = 'ready' ORDER BY id").all(run.id) as { id: number }[];
+      ctx.notify({ title: `run ${run.id} (${run.change_dir}) is held`, message: reason, taskIds: ready.map((t) => t.id) });
+    }
+  }
+  return held;
+}
+
+// 6. One batch: ready tasks of one run with the same tier and phase, highest priority
 // first. A run with a task awaiting approval is held, so its head stays what you review.
-function leaseBatch(ctx: Ctx): TaskRow[] | undefined {
+function leaseBatch(ctx: Ctx, held: Set<number>): TaskRow[] | undefined {
   if (!quotaState(ctx.db).open) return undefined;
   const first = ctx.db
     .prepare(
       `SELECT t.* FROM tasks t JOIN runs r ON r.id = t.run_id
        WHERE t.state = 'ready' AND r.status = 'active'
          AND NOT EXISTS (SELECT 1 FROM tasks b WHERE b.run_id = t.run_id AND b.state = 'awaiting_approval')
+         AND r.id NOT IN (${[...held].map(() => '?').join(', ')})
        ORDER BY t.priority DESC, t.id LIMIT 1`,
     )
-    .get() as TaskRow | undefined;
+    .get(...held) as TaskRow | undefined;
   if (!first) return undefined;
   return ctx.db
     .prepare(`SELECT * FROM tasks WHERE run_id = ? AND state = 'ready' AND tier = ? AND phase = ? ORDER BY priority DESC, id LIMIT ?`)

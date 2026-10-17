@@ -63,7 +63,7 @@ export const sandboxValidate: Validate = async ({ cwd, commands }) => {
   return { ok: true };
 };
 
-const GUARD_PLUGIN_DIR = fileURLToPath(new URL('../../plugin', import.meta.url));
+export const GUARD_PLUGIN_DIR = fileURLToPath(new URL('../../plugin', import.meta.url));
 
 export function makeExecutor(
   kind: string | undefined,
