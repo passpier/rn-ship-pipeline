@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { seatbeltProfile } from '@rnship/policy';
 import { startProxy } from '../src/sandbox.ts';
 
 const MAIN = fileURLToPath(new URL('../src/main.ts', import.meta.url));
@@ -35,6 +36,15 @@ describe('allowlisting proxy', () => {
       await proxy.close();
       upstream.close();
     }
+  });
+});
+
+describe('seatbelt profile', () => {
+  it('opens the home under /Users before the secret denies, so they still win', () => {
+    const profile = seatbeltProfile({ home: '/Users/rnship-test-agent' });
+    const open = profile.indexOf('(allow file-read*\n  (subpath "/Users/rnship-test-agent")');
+    expect(open).toBeGreaterThan(profile.indexOf('(deny file-read* (subpath "/Users"))'));
+    expect(profile.indexOf('(subpath "/Users/rnship-test-agent/.expo")')).toBeGreaterThan(open);
   });
 });
 
@@ -76,6 +86,21 @@ describe.skipIf(process.platform !== 'darwin')('rnship sandbox run', () => {
       `const u=new URL(process.env.HTTPS_PROXY);require('http').request({host:u.hostname,port:u.port,method:'CONNECT',path:'evil.example.com:443'}).on('connect',(r,s)=>{s.destroy();process.exit(r.statusCode===403?4:0)}).on('error',()=>process.exit(5)).end()`,
     );
     expect(run.status).toBe(4);
+  });
+
+  it("blocks reading another user's home", () => {
+    // This checkout sits in your home, which is neither the sandbox's home nor its cwd.
+    const run = sandboxed(`require('fs').readFileSync(${JSON.stringify(fileURLToPath(new URL('../../package.json', import.meta.url)))})`);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('EPERM');
+  });
+
+  it('blocks listing mounted volumes and system keychains, but reads the CA keychain', () => {
+    for (const dir of ['/Volumes', '/Library/Keychains']) {
+      const run = sandboxed(`require('fs').readdirSync(${JSON.stringify(dir)})`);
+      expect(run.stderr, dir).toContain('EPERM');
+    }
+    expect(sandboxed(`require('fs').readFileSync('/Library/Keychains/System.keychain')`).status).toBe(0);
   });
 
   it('lets the command read and write its worktree', () => {

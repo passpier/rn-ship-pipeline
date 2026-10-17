@@ -56,21 +56,63 @@ export function claudeSandboxSettings() {
     enabled: true,
     allowUnsandboxedCommands: false,
     failIfUnavailable: true,
-    filesystem: { denyRead: [...SECRET_PATHS], denyWrite: [...SECRET_PATHS, ...PERSISTENCE_PATHS] },
+    // Other users' homes and mounted volumes: no reads. The narrower `~/` (the agent's own
+    // home) re-opens its part of /Users, and the secret denies inside it are narrower still.
+    filesystem: {
+      denyRead: ['/Users', '/Volumes', ...SECRET_PATHS],
+      allowRead: ['~/'],
+      denyWrite: [...SECRET_PATHS, ...PERSISTENCE_PATHS],
+    },
     network: { allowedDomains: [...NETWORK_ALLOWLIST] },
   };
 }
 
+// Mach services that mount disks or network shares, or script Finder into doing it.
+const MOUNT_SERVICES = [
+  'com.apple.DiskArbitration.diskarbitrationd',
+  'com.apple.NetAuthAgent',
+  'com.apple.NetAuthSysAgent',
+  'com.apple.appleeventsd',
+];
+
 /**
  * A `sandbox-exec` (Seatbelt) profile for validation commands. Everything is allowed
- * except reading or writing secrets, writing persistence paths, and outbound network
- * other than localhost. SBPL can't match hostnames, so allowlisted hosts are reached
- * through the localhost proxy that `rnship sandbox run` starts.
+ * except reading other users' homes (only `home` and the `readable` paths stay open
+ * under /Users), mounted volumes, raw disks and system keychains; mounting; reading or
+ * writing secrets; writing persistence paths; and outbound network other than
+ * localhost. SBPL can't match hostnames, so allowlisted hosts are reached through the
+ * localhost proxy that `rnship sandbox run` starts. The /Users rules follow sandvault's
+ * profile (github.com/webcoyote/sandvault).
  */
-export function seatbeltProfile(opts: { home: string }): string {
+export function seatbeltProfile(opts: { home: string; readable?: string[] }): string {
   const paths = (list: string[]) => list.map((p) => `  (subpath ${sbplString(realHomePath(p, opts.home))})`).join('\n');
+  const open = [opts.home, ...(opts.readable ?? [])].map((p) => realHomePath(p, opts.home));
+  // Path lookup stats each parent, so the parents of an open path keep their metadata.
+  const parents = [...new Set(open.flatMap(ancestors))].filter((p) => p.startsWith('/Users/'));
+  const literals = (list: string[]) => list.map((p) => `  (literal ${sbplString(p)})`).join('\n');
   return `(version 1)
 (allow default)
+; Other users' homes: no reads. First, so the secret denies below still win inside the
+; open paths (the last matching rule applies).
+(deny file-read* (subpath "/Users"))
+(allow file-read-metadata
+  (literal "/Users")
+${literals(parents)})
+(allow file-read*
+${open.map((p) => `  (subpath ${sbplString(p)})`).join('\n')})
+; Mounted volumes except the boot volume's link, raw disks, packet capture: no access.
+(deny file-read* (subpath "/Volumes"))
+(allow file-read* (literal "/Volumes/Macintosh HD"))
+(deny file-read* file-write*
+  (regex #"^(/private)?/dev/r?disk")
+  (regex #"^(/private)?/dev/bpf"))
+; No mounting, directly or through the services that do it.
+(deny file-mount file-unmount)
+(deny mach-lookup
+${MOUNT_SERVICES.map((name) => `  (global-name ${sbplString(name)})`).join('\n')})
+; System keychains: no reads, except System.keychain's public CA anchors.
+(deny file-read* (subpath "/Library/Keychains"))
+(allow file-read* (literal "/Library/Keychains/System.keychain"))
 ; Secrets: no reads, no writes.
 (deny file-read* file-write*
 ${paths(SECRET_PATHS)})
@@ -90,6 +132,13 @@ function realHomePath(path: string, home: string): string {
   if (existsSync(full)) return realpathSync(full);
   const parent = realHomePath(full.slice(0, full.lastIndexOf('/')) || '/', home);
   return join(parent, full.slice(full.lastIndexOf('/') + 1));
+}
+
+// '/Users/a/b' → ['/Users/a', '/Users'], nearest first; '/' is never included.
+function ancestors(path: string): string[] {
+  const out: string[] = [];
+  for (let p = path.slice(0, path.lastIndexOf('/')); p; p = p.slice(0, p.lastIndexOf('/'))) out.push(p);
+  return out;
 }
 
 function sbplString(value: string): string {

@@ -67,7 +67,13 @@ describe('rnship policy', () => {
       disableAllHooks: false,
       enabledPlugins: { 'rnship@inline': true },
       env: { RNSHIP_HOOK_RULES: join(out, 'hook-rules.json') },
-      sandbox: { enabled: true, allowUnsandboxedCommands: false, filesystem: { denyRead: expect.arrayContaining(['~/.expo']) } },
+      sandbox: {
+        enabled: true,
+        allowUnsandboxedCommands: false,
+        // Other homes and volumes are closed; the agent's own home is re-opened, and the
+        // narrower secret denies inside it still hold.
+        filesystem: { denyRead: expect.arrayContaining(['/Users', '/Volumes', '~/.expo']), allowRead: ['~/'] },
+      },
     });
     expect(settings.permissions.deny).toContain('Bash(eas credentials*)');
   });

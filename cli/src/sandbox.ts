@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { hostAllowed, NETWORK_ALLOWLIST, seatbeltProfile } from '@rnship/policy';
 
 // `rnship sandbox run -- <command>`: runs a validation command (tsc, jest, expo export,
@@ -59,7 +59,10 @@ export async function sandboxRun(command: string[], opts: { home: string; cwd?: 
   if (command.length === 0) throw new Error('no command to run');
   const dir = mkdtempSync(join(tmpdir(), 'rnship-sandbox-'));
   const profile = join(dir, 'profile.sb');
-  writeFileSync(profile, seatbeltProfile({ home: opts.home }));
+  // Under /Users only the home, the worktree and the Node install rnship runs on stay
+  // readable: validation commands run on that same toolchain.
+  const toolchain = dirname(dirname(realpathSync(process.execPath)));
+  writeFileSync(profile, seatbeltProfile({ home: opts.home, readable: [opts.cwd ?? process.cwd(), toolchain] }));
   const proxy = await startProxy(opts.allowlist);
   const url = `http://127.0.0.1:${proxy.port}`;
   try {
