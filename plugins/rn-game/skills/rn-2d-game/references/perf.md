@@ -15,7 +15,7 @@ A frame is 16.7 ms at 60 Hz and 8.3 ms at 120 Hz. The UI thread does all of thes
 - Reading shared values on the JS thread, which blocks until the threads sync.
 - Unmemoized frame callbacks or gestures. Use `useCallback` and `useMemo`.
 - One draw per sprite instead of one `<Atlas>` per sheet.
-- iOS capped at 60 fps. Allowing 120 Hz on ProMotion needs `CADisableMinimumFrameDurationOnPhone` in Info.plist. The template has it on by default since RN 0.82, so check rather than add it.
+- iOS capped at 60 fps. Allowing 120 Hz on ProMotion needs `CADisableMinimumFrameDurationOnPhone` in Info.plist. Expo's SDK 55 prebuild template already sets it to `true`, so check rather than add it.
 
 ## Known causes, from experience (judgment)
 - Allocating objects in `stepWorld` or in buffer callbacks: GC pauses show up as periodic hitches.
@@ -24,5 +24,6 @@ A frame is 16.7 ms at 60 Hz and 8.3 ms at 120 Hz. The UI thread does all of thes
 - `scheduleOnRN` every frame: it floods the JS thread. Push HUD changes only when a value changes.
 
 ## Sources
-- Reanimated performance guide: https://docs.swmansion.com/react-native-reanimated/docs/guides/performance
-- Skia rendering modes: https://wcandillon.github.io/react-native-skia/docs/canvas/rendering-modes
+- Reanimated performance guide (4.2.1): https://github.com/software-mansion/react-native-reanimated/blob/4.2.1/docs/docs-reanimated/docs/guides/performance.md
+- Skia rendering modes (2.4.18): https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/docs/docs/canvas/rendering-modes.md
+- Expo SDK 55 iOS template Info.plist: https://github.com/expo/expo/blob/sdk-55/templates/expo-template-bare-minimum/ios/HelloWorld/Info.plist

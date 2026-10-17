@@ -6,11 +6,13 @@ The loop is one `useFrameCallback` that feeds frame time to the sim's `advance` 
 Keep the world in one shared value, and mutate it with `modify`. Assigning `world.value = {...}` copies the object every frame, and `world.value.agents.push()` loses reactivity.
 
 ```tsx
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useFrameCallback, useSharedValue, type FrameInfo } from 'react-native-reanimated';
 import { advance, createWorld } from './sim';
 
-const world = useSharedValue(() => createWorld(seed, WORLD_W, WORLD_H, COUNT)); // lazy init: Reanimated ≥ 4.4
+// Reanimated 4.2 (SDK 55) has no lazy init: useSharedValue(() => …) would store the function.
+const [initialWorld] = useState(() => createWorld(seed, WORLD_W, WORLD_H, COUNT)); // built once
+const world = useSharedValue(initialWorld);
 const alpha = useSharedValue(0); // interpolation factor for the renderer
 
 const loop = useFrameCallback(
@@ -60,7 +62,7 @@ Re-activation gives `timeSincePreviousFrame: null`, which counts as 0. A resume 
 - Reading a shared value on the JS thread blocks until the threads sync. That's fine for an occasional save, but don't do it in a render or a timer.
 
 ## Sources
-- `useFrameCallback`: https://docs.swmansion.com/react-native-reanimated/docs/advanced/useFrameCallback
-- `useSharedValue`, `modify`: https://docs.swmansion.com/react-native-reanimated/docs/core/useSharedValue
-- `scheduleOnRN`: https://docs.swmansion.com/react-native-worklets/docs/threading/scheduleOnRN
+- `useFrameCallback` (4.2.1): https://github.com/software-mansion/react-native-reanimated/blob/4.2.1/docs/docs-reanimated/docs/advanced/useFrameCallback.mdx
+- `useSharedValue`, `modify` (4.2.1): https://github.com/software-mansion/react-native-reanimated/blob/4.2.1/docs/docs-reanimated/docs/core/useSharedValue.mdx
+- `scheduleOnRN` (0.7.4): https://github.com/software-mansion/react-native-reanimated/blob/worklets-0.7.4/docs/docs-worklets/docs/threading/scheduleOnRN.mdx
 - `AppState`: https://reactnative.dev/docs/appstate

@@ -6,7 +6,7 @@
 - Example commands: `{ type: 'attract', x, y }` (in the reference sim; a game adds its own, like `feed`), `{ type: 'select', id }`.
 
 ```tsx
-import { Gesture, GestureDetector } from 'react-native-gesture-handler'; // 2.x builder API (SDK 57)
+import { Gesture, GestureDetector } from 'react-native-gesture-handler'; // 2.x builder API (SDK 55)
 
 const tap = useMemo(
   () =>
@@ -32,7 +32,7 @@ const tap = useMemo(
 - Memoize gestures with `useMemo`, and give each detector its own gesture instance.
 - Combine gestures with `Gesture.Exclusive(doubleTap, tap)`, `Simultaneous` or `Race`.
 - Wrap the app root in `<GestureHandlerRootView>`. A modal needs its own root view.
-- On Gesture Handler 3.x (SDK 58), the same tap is written as `useTapGesture({ onDeactivate: … })`. See [stack.md](stack.md).
+- Don't copy the hook API (`useTapGesture({ onDeactivate: … })`) from the current docs. It's Gesture Handler 3, which SDK 55 doesn't have. See [stack.md](stack.md).
 
 ## Hit testing
 Skia has no scene-graph hit testing, so do it in world space:
@@ -48,7 +48,7 @@ Skia has no scene-graph hit testing, so do it in world space:
 - Give the canvas container an `accessibilityLabel` that summarizes the scene ("Tank with 12 fish"), and update it when the summary changes.
 
 ## Sources
-- Skia + gestures: https://wcandillon.github.io/react-native-skia/docs/animations/gestures
-- GestureDetector (2.x): https://docs.swmansion.com/react-native-gesture-handler/docs/2.x/gestures/gesture-detector
-- Tap gesture (2.x): https://docs.swmansion.com/react-native-gesture-handler/docs/2.x/gestures/tap-gesture
-- Installation, root view: https://docs.swmansion.com/react-native-gesture-handler/docs/2.x/fundamentals/installation
+- Skia + gestures (2.4.18): https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/docs/docs/animations/gestures.md
+- GestureDetector (2.30): https://github.com/software-mansion/react-native-gesture-handler/blob/v2.30.0/packages/docs-gesture-handler/docs/gestures/gesture-detector.md
+- Tap gesture (2.30): https://github.com/software-mansion/react-native-gesture-handler/blob/v2.30.0/packages/docs-gesture-handler/docs/gestures/tap-gesture.md
+- Installation, root view (2.30): https://github.com/software-mansion/react-native-gesture-handler/blob/v2.30.0/packages/docs-gesture-handler/docs/fundamentals/installation.md

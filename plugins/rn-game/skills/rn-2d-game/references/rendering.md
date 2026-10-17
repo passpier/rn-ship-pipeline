@@ -46,7 +46,7 @@ return (
 - The buffers recompute when a shared value they capture changes. Here that's `alpha`, which changes every frame.
 - The buffer size is fixed by `COUNT`, so give it the maximum capacity, and hide spare slots with a zero transform (a judgment call, not documented). If capacity changes a lot, switch to the Picture API.
 - `Skia.RSXformFromRadians(scale, rad, tx, ty, px, py)` builds the same transform, but it allocates. Use `val.set(...)` inside buffers.
-- `Atlas` also takes `colors` (per-sprite tint, via `useColorBuffer`), `colorBlendMode` and `sampling`.
+- `Atlas` also takes `colors` (per-sprite tint, via `useColorBuffer`), `blendMode` (how sprites and colors combine) and `sampling`. Skia 2.4 (SDK 55) has no `colorBlendMode`. That prop is in newer docs only.
 
 ## Images
 - `useImage(require(...))` loads from the JS bundle. Bundled assets ship in OTA updates.
@@ -61,10 +61,11 @@ return (
 - Input maps back through the same scale. See [input-hud.md](input-hud.md).
 
 ## Sources
-- Animations (shared values as props): https://wcandillon.github.io/react-native-skia/docs/animations/animations
-- Atlas: https://wcandillon.github.io/react-native-skia/docs/shapes/atlas
-- Buffer hooks: https://wcandillon.github.io/react-native-skia/docs/animations/hooks
-- Rendering modes: https://wcandillon.github.io/react-native-skia/docs/canvas/rendering-modes
-- Pictures: https://wcandillon.github.io/react-native-skia/docs/shapes/pictures
-- Images: https://wcandillon.github.io/react-native-skia/docs/images
-- Performance example, 300+ sprites: https://github.com/wcandillon/react-native-skia/blob/v2.6.2/apps/example/src/Examples/Performance/Atlas.tsx
+All at Skia `v2.4.18`, the version SDK 55 bundles. The docs site tracks newer releases.
+- Animations (shared values as props): https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/docs/docs/animations/reanimated3.md
+- Atlas: https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/docs/docs/shapes/atlas.md
+- Buffer hooks: https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/docs/docs/animations/hooks.md
+- Rendering modes: https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/docs/docs/canvas/rendering-modes.md
+- Pictures: https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/docs/docs/pictures.md
+- Images: https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/docs/docs/image.md
+- Performance example, 300+ sprites: https://github.com/wcandillon/react-native-skia/blob/v2.4.18/apps/example/src/Examples/Performance/Atlas.tsx

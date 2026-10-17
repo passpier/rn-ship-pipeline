@@ -20,7 +20,8 @@ const playBubble = () => { bubble.seekTo(0); bubble.play(); };      // replay pa
 ```
 
 - **Mode:** `mixWithOthers` is the default, and the docs recommend it for sound effects, so the player's own music keeps playing.
-  - `playsInSilentMode` defaults to `true`. Most games set it to `false`, so the mute switch silences them.
+  - `playsInSilentMode` (iOS) has no documented default on SDK 55, so always pass it. Most games set it to `false`, so the mute switch silences them.
+  - The docs say only the keys you pass get updated, but on iOS an omitted `playsInSilentMode` becomes `false` natively. Pass every key you care about in each call.
 - **Music:** one player with `player.loop = true`. The `loop: boolean` property is typed, but the docs give no looping example, so check it on a device.
 - **Players that outlive a component:** create them with `createAudioPlayer(source)` and call `release()` yourself, or they leak.
 - **Background:** pause music when `AppState` leaves `active`, or call `setIsAudioActiveAsync(false)`. The expo-audio config plugin's `enableBackgroundPlayback` defaults to `true`, which adds the iOS `audio` background mode and an Android foreground service. A game without background audio should set it to `false`. Under rn-ship-pipeline, that change is a config change that needs a build.
@@ -28,6 +29,7 @@ const playBubble = () => { bubble.seekTo(0); bubble.play(); };      // replay pa
 - **Limits:** no maximum number of concurrent players is documented, so reuse a small pool per effect rather than one player per event. For sample-accurate or heavy audio, the Expo docs point to React Native Audio API.
 
 ## Sources
-- expo-audio (SDK 57): https://docs.expo.dev/versions/v57.0.0/sdk/audio/
+- expo-audio (SDK 55): https://docs.expo.dev/versions/v55.0.0/sdk/audio/
+- expo-audio source, `preload` and `setAudioModeAsync` JSDoc: https://github.com/expo/expo/blob/sdk-55/packages/expo-audio/src/ExpoAudio.ts
 - Storing data: https://docs.expo.dev/develop/user-interface/store-data/
-- expo-sqlite, kv-store: https://docs.expo.dev/versions/v57.0.0/sdk/sqlite/
+- expo-sqlite, kv-store (SDK 55): https://docs.expo.dev/versions/v55.0.0/sdk/sqlite/
