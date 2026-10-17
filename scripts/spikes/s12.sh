@@ -417,6 +417,16 @@ as_agent_sh "cd rnship && npx -y pnpm@10.30.0 install --frozen-lockfile --report
 [[ "$(as_agent git -C "$AGENT_RNSHIP" rev-parse HEAD)" == "$RNSHIP_SHA" ]] || fail "the agent's checkout isn't at $RNSHIP_SHA"
 as_agent /bin/sh -c 'command -v rnship' >/dev/null || fail "rnship isn't on the agent's PATH"
 say "Installed in $AGENT_RNSHIP."
+# Xcode decides which simulator runtimes fit its SDK from a per-user index that the Xcode app
+# downloads (SDKToSimulatorIndexMapping.plist). Without it, SDK 26.2 (23C57) only takes runtime
+# 23C57, so the installed 26.3.1 (23D8133) reads as "iOS 26.2 is not installed" and no
+# simulator destination exists. xcodebuild doesn't fetch it, so the agent gets yours: public data.
+SIM_INDEX=Library/Developer/Xcode/SDKToSimulatorIndexMapping.plist
+[[ -f "$HOME/$SIM_INDEX" ]] || fail "no ~/$SIM_INDEX: open Xcode once, then re-run"
+as_agent mkdir -p "$AGENT_HOME/$(dirname "$SIM_INDEX")"
+sudo install -o "$AGENT" -g "$AGENT" -m 644 "$HOME/$SIM_INDEX" "$AGENT_HOME/$SIM_INDEX"
+record S12_SIM_INDEX copied
+say "Copied Xcode's SDK-to-simulator index to $AGENT."
 pause
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
