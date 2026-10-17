@@ -121,9 +121,20 @@ export async function changeTasks(
   return { ...report, runId: result.runId, created: result.created };
 }
 
-/** Installs a change's approved packages under the validation sandbox (A3b delta). */
+/**
+ * Installs a change's approved packages under the validation sandbox (A3b delta). A fresh
+ * worktree has no node_modules, so it first installs what the lockfile pins; expo install
+ * then updates package.json and the lockfile together. npm apps only for now.
+ */
 export const sandboxInstall: Installer = async ({ cwd, packages }) => {
-  const code = await sandboxRun(['npx', '--no-install', 'expo', 'install', ...packages], { home: homedir(), cwd, timeoutSec: 1800 });
-  if (code === TIMED_OUT) return { ok: false, digest: 'expo install timed out after 1800s' };
-  return code === 0 ? { ok: true } : { ok: false, digest: `expo install exited ${code}` };
+  if (!existsSync(join(cwd, 'package-lock.json'))) return { ok: false, digest: 'no package-lock.json: the A3b delta install supports npm apps only' };
+  for (const command of [
+    ['npm', 'ci', '--no-audit', '--no-fund', '--loglevel=error'],
+    ['npx', '--no-install', 'expo', 'install', ...packages],
+  ]) {
+    const code = await sandboxRun(command, { home: homedir(), cwd, timeoutSec: 1800 });
+    if (code === TIMED_OUT) return { ok: false, digest: `\`${command.join(' ')}\` timed out after 1800s` };
+    if (code !== 0) return { ok: false, digest: `\`${command.join(' ')}\` exited ${code}` };
+  }
+  return { ok: true };
 };
