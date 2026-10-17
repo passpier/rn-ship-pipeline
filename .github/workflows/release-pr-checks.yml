@@ -9,9 +9,13 @@ on:
   workflow_call:
     inputs:
       rnship-sha:
-        description: Commit of passpier/rn-ship-pipeline to run `rnship` from. Use the same SHA the caller pins this workflow to.
+        description: Commit of `rnship-repo` to run `rnship` from. Use the same SHA the caller pins this workflow to.
         type: string
         required: true
+      rnship-repo:
+        description: The rn-ship-pipeline repo (owner/name) the caller takes this workflow from; set it when that's a fork.
+        type: string
+        default: passpier/rn-ship-pipeline
       install-command:
         type: string
         default: npm ci
@@ -53,7 +57,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: passpier/rn-ship-pipeline
+          repository: ${{ inputs.rnship-repo }}
           ref: ${{ inputs.rnship-sha }}
           path: rnship
           persist-credentials: false

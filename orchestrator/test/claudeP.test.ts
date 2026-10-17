@@ -1,9 +1,10 @@
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compilePolicy, loadBasePolicy } from '@rnship/policy';
 import { describe, expect, it } from 'vitest';
+import { spawnSession } from '../src/executors/claudeSession.ts';
 import { ClaudePExecutor, renderTaskPrompt, signalOf, SIGNALS, type ExecRequest } from '../src/index.ts';
 import { gitIn, harness } from './harness.ts';
 
@@ -246,5 +247,17 @@ describe('claude-p adapter against stub claude', () => {
     const executor = claudeP({ calls: ['limit', 'done'], resetsAt });
     expect(await executor.probe({ id: 'claude-haiku-5-5' })).toEqual({ ok: false, limitKind: 'five_hour', resetAt: '2026-10-16T05:00:00.000Z' });
     expect(await executor.probe({ id: 'claude-haiku-5-5' })).toEqual({ ok: true });
+  });
+});
+
+describe('session env', () => {
+  it("puts rnship's own Node first on PATH, ahead of an older node elsewhere on it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rnship-session-'));
+    const run = await spawnSession({ pluginDir: PLUGIN, settingsFile: join(dir, 's.json'), workDir: dir }, '/bin/sh', ['-c', 'command -v node'], {
+      cwd: dir,
+      transcripts: join(dir, 't'),
+      signal: AbortSignal.timeout(10_000),
+    });
+    expect(run.output.trim()).toBe(join(dirname(process.execPath), 'node'));
   });
 });

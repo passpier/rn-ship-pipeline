@@ -197,9 +197,11 @@ finish() {
 # docs/spikes/M3.results.env (gitignored). No secrets are involved.
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-PIPELINE_URL=https://github.com/passpier/rn-ship-pipeline
-AGENT=rnship-agent
-AGENT_HOME=/Users/$AGENT
+# The agent clones the repo you run this from (a fork clones itself), over https.
+PIPELINE_URL=$(git -C "$ROOT" remote get-url origin | sed -E 's#^git@([^:]+):#https://\1/#; s#\.git$##')
+AGENT=${RNSHIP_AGENT_USER:-rnship-agent}
+AGENT_HOME=$(dscl . -read "/Users/$AGENT" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+AGENT_HOME=${AGENT_HOME:-/Users/$AGENT}
 AGENT_RNSHIP=$AGENT_HOME/rnship
 AGENT_PATH=$AGENT_RNSHIP/node_modules/.bin:$AGENT_HOME/.local/node/bin:$AGENT_HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 SHARED=/Users/Shared/rnship-m3   # logs, the fixture bundle, task files, ralphex (yours, group $AGENT, 1770)
@@ -357,6 +359,7 @@ banner "M3: live claude-p and ralphex runs as $AGENT"
 # ── 1 ─────────────────────────────────────────────────────────────────────
 stage "Preflight"
 [[ $EUID -ne 0 && "$(id -un)" != "$AGENT" ]] || fail "run this as your own macOS user"
+[[ "$(uname -m)" == arm64 ]] || fail "rn-ship-pipeline supports Apple Silicon Macs only (ralphex is pinned to its arm64 build)"
 for c in gh jq git node npx curl shasum sudo; do command -v "$c" >/dev/null || fail "missing $c"; done
 node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' || fail "need Node 24 (nvm use 24)"
 say "sudo runs every step as $AGENT; enter your password once."
@@ -371,7 +374,7 @@ sudo test -x "$AGENT_HOME/.local/bin/claude" || fail "no claude for $AGENT (S0 s
 [[ "$(as_agent node -v 2>/dev/null)" == v24.* ]] || fail "$AGENT has no Node 24 in ~/.local/node (S0)"
 if in_staff; then
   warn "$AGENT is in the staff group."
-  confirm "Move $AGENT to a group of its own (rnship-agent)?" || fail "$AGENT must leave staff first"
+  confirm "Move $AGENT to a group of its own ($AGENT)?" || fail "$AGENT must leave staff first"
   own_group
   ! in_staff || fail "$AGENT is still in staff: check dscl . -read /Users/$AGENT PrimaryGroupID"
   say "Done. Its running session still carries staff until it logs out."

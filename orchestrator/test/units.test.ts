@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { canTransition, decide, openDb, parseTasks, runStage, transition, TransitionError } from '../src/index.ts';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir, userInfo } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { canTransition, decide, ensureGitIdentity, git, openDb, parseTasks, runStage, transition, TransitionError } from '../src/index.ts';
 import { harness } from './harness.ts';
 
 const now = new Date('2026-10-16T00:00:00Z');
@@ -119,5 +123,28 @@ describe('tick', () => {
     const h = harness();
     h.db.prepare("INSERT INTO locks (name, pid, at) VALUES ('tick', ?, 'x')").run(process.ppid);
     expect(await h.tick()).toMatchObject({ busy: true });
+  });
+});
+
+describe('git identity', () => {
+  it('gives a repo with no configured author the OS user, and keeps one that has an author', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rnship-ident-'));
+    writeFileSync(join(root, 'empty.gitconfig'), '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', join(root, 'empty.gitconfig'));
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    try {
+      const repo = join(root, 'repo');
+      execFileSync('git', ['init', '-q', repo]);
+      ensureGitIdentity(repo);
+      const user = userInfo().username;
+      expect(git(repo, 'config', 'user.name').trim()).toBe(user);
+      expect(git(repo, 'config', 'user.email').trim()).toBe(`${user}@localhost`);
+
+      git(repo, 'config', 'user.email', 'me@example.com');
+      ensureGitIdentity(repo);
+      expect(git(repo, 'config', 'user.email').trim()).toBe('me@example.com');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

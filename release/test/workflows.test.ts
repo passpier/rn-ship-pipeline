@@ -19,6 +19,13 @@ describe('reusable release workflows', () => {
     expect(pinned(wf.jobs.checks.steps)).toBe(true);
   });
 
+  it('PR checks run rnship from the repo the caller names, so a fork runs its own code', () => {
+    const wf = load('release-pr-checks.yml');
+    expect(wf.on.workflow_call.inputs['rnship-repo']).toMatchObject({ type: 'string', default: 'passpier/rn-ship-pipeline' });
+    const checkout = wf.jobs.checks.steps.find((s: { with?: { path?: string } }) => s.with?.path === 'rnship');
+    expect(checkout.with).toMatchObject({ repository: '${{ inputs.rnship-repo }}', ref: '${{ inputs.rnship-sha }}' });
+  });
+
   it('staging OTA runs only on push to main, publishes to staging, and uploads source maps', () => {
     const wf = load('release-staging-ota.yml');
     expect(Object.keys(wf.on)).toEqual(['workflow_call']);

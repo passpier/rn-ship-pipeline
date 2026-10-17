@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Db } from './db.ts';
 import type { RunRow } from './runs.ts';
@@ -27,8 +28,24 @@ export function ensureWorktree(db: Db, run: RunRow, worktreesDir: string): strin
     if (branchExists) git(run.repo, 'worktree', 'add', path, branch);
     else git(run.repo, 'worktree', 'add', '-b', branch, path, run.base_sha);
   }
+  ensureGitIdentity(path);
   if (run.worktree !== path || run.branch !== branch) db.prepare('UPDATE runs SET worktree = ?, branch = ? WHERE id = ?').run(path, branch, run.id);
   return path;
+}
+
+/**
+ * Agent commits need an author. When no git config names one (a freshly provisioned agent
+ * user on another Mac), the repo gets one: the OS user, at localhost.
+ */
+export function ensureGitIdentity(cwd: string): void {
+  const user = userInfo().username;
+  for (const [key, value] of [['user.name', user], ['user.email', `${user}@localhost`]] as const) {
+    try {
+      git(cwd, 'config', '--get', key);
+    } catch {
+      git(cwd, 'config', key, value);
+    }
+  }
 }
 
 /**

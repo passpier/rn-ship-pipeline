@@ -5,7 +5,14 @@ Takes Expo-managed React Native apps from an approved change to a human-approved
 **Status: pre-release.** Nothing is tagged until the whole pipeline runs end to end on a real app. M0 (policy engine, OTA classifier) and M1 are done. M1 covers the guard plugin, executor settings, `rnship policy check`, the approve commands, the validation sandbox, and the release workflow templates. Its acceptance ran on a private fixture app repo ([M1e](docs/spikes/M1e.md)). Scope, plan and milestones: [STATUS.md](STATUS.md).
 
 ## Requirements
-Node 24 (`.nvmrc`) and pnpm 10.
+Node 24 (`.nvmrc`) and pnpm 10 for the toolkit itself; its tests run anywhere, and the sandbox tests only on macOS.
+
+Running the pipeline needs an Apple Silicon Mac (Intel isn't supported). On it:
+- Xcode that fits the app's Expo SDK (SDK 55 builds with Xcode 26.3; ADR 0003), opened once, so Xcode downloads its SDK-to-simulator index.
+- Node 24 for you and for `rnship-agent`.
+- CocoaPods outside your home (Homebrew is fine), so the agent can run it too.
+- `gh`, and eas-cli 24.13.x (release approvals refuse any other version).
+- Watchman is optional. Both sandboxes turn it off, and Metro and jest use their node crawler instead.
 
 ```sh
 pnpm install

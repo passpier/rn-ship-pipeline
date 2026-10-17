@@ -35,6 +35,7 @@ jobs:
     uses: passpier/rn-ship-pipeline/.github/workflows/release-pr-checks.yml@<40-char SHA>
     with:
       rnship-sha: <same 40-char SHA>
+      # rnship-repo: <owner>/rn-ship-pipeline  # only when `uses:` points at a fork
     # No `secrets:` here, and never `secrets: inherit`.
   staging-ota:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

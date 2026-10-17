@@ -13,7 +13,7 @@ export { runStage, stageKey } from './stages.ts';
 export { ACTIVE_STATES, canTransition, getTask, STATES, transition, TransitionError, type State, type TaskRow } from './states.ts';
 export { importTasks, loadTasks, parseTasks, TasksFileSchema, type ImportResult, type TasksFile } from './tasks.ts';
 export { approvalSubject, tick, type BatchReport, type DiffCheck, type Gate, type TickOptions, type TickReport, type Validate } from './tick.ts';
-export { ensureWorktree, git, headSha, resetWorktree } from './worktree.ts';
+export { ensureGitIdentity, ensureWorktree, git, headSha, resetWorktree } from './worktree.ts';
 export { claudeArgs, SHIM, type SessionOptions } from './executors/claudeSession.ts';
 export { classify, RalphexExecutor, ralphexArg, type RalphexOptions } from './executors/ralphex.ts';
 export { completedTaskNumbers, renderPlan } from './executors/ralphexPlan.ts';

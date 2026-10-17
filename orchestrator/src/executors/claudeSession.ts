@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ModelSpec } from '@rnship/policy';
 import type { LimitKind, ProbeResult } from '../executor.ts';
@@ -84,6 +84,9 @@ export function spawnSession(
   env.RNSHIP_CLAUDE = opts.claude ?? env.RNSHIP_CLAUDE ?? 'claude';
   env.RNSHIP_TRANSCRIPTS = run.transcripts;
   env.RNSHIP_GUARD_PLUGIN = opts.guardPlugin ?? 'rnship';
+  // The shim, the guard hook and the agent's own `node` resolve through PATH: put the Node
+  // rnship runs on first, so another Mac's older node on PATH can't pick them up.
+  env.PATH = [dirname(process.execPath), env.PATH].filter(Boolean).join(delimiter);
   const child = spawn(command, args, { cwd: run.cwd, env, stdio: [run.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
   if (child.stdin) {
     child.stdin.on('error', () => {});

@@ -9,7 +9,11 @@ import { readMainHead, writeMainHead } from './mainHead.ts';
 // the artifact it is about to act on, and records a single-use approval afterwards.
 //
 // eas-cli flags and JSON fields were checked against eas-cli 24.13.0 (oclif manifest,
-// BuildFragment, getUpdateJsonInfosForUpdates).
+// BuildFragment, getUpdateJsonInfosForUpdates), so release approvals refuse another
+// eas-cli minor before their first eas call.
+
+/** The eas-cli line the flags were checked against; any patch release of it is accepted. */
+export const EAS_CLI_VERSION = '24.13';
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 /** Runs a command. `capture` returns its output; otherwise output goes to the terminal. */
@@ -217,7 +221,24 @@ function prepare(ctx: ApproveContext, kind: ApprovalKind, digest: string) {
   if (existsSync(approvalPath(ctx.state, kind, digest))) {
     throw new ApprovalError(`${kind} ${digest} was already approved; approvals are single-use`);
   }
-  return { run: ctx.run ?? spawnRunner, env };
+  const run = ctx.run ?? spawnRunner;
+  return { run: kind === 'release' ? pinnedEas(run) : run, env };
+}
+
+// Checks `eas --version` once, before the first other eas call goes through `run`.
+function pinnedEas(run: Runner): Runner {
+  let checked = false;
+  return (command, args, opts) => {
+    if (command === 'eas' && !checked) {
+      const out = text(run('eas', ['--version'], { cwd: opts.cwd, capture: true }));
+      const version = /eas-cli\/(\d+\.\d+\.\d+)/.exec(out)?.[1];
+      if (!version?.startsWith(`${EAS_CLI_VERSION}.`)) {
+        throw new ApprovalError(`eas-cli ${version ?? `(unrecognized: ${out})`} isn't ${EAS_CLI_VERSION}.x, whose flags rnship was checked against: npm i -g eas-cli@${EAS_CLI_VERSION}.0`);
+      }
+      checked = true;
+    }
+    return run(command, args, opts);
+  };
 }
 
 const query = (ctx: ApproveContext) => ({ cwd: ctx.cwd, capture: true });

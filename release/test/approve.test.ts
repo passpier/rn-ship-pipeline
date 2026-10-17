@@ -28,7 +28,7 @@ function sandbox() {
       `  api:*/commits/*) printf '%s' "$FAKE_GH_PARENT";;`,
       'esac',
     ].join('\n'),
-    eas: `case "$1" in build:view) printf '%s' "$FAKE_EAS_BUILD";; update:view) printf '%s' "$FAKE_EAS_UPDATE";; esac`,
+    eas: `case "$1" in --version) echo "eas-cli/\${FAKE_EAS_VERSION:-24.13.0} darwin-arm64 node-v24.0.0";; build:view) printf '%s' "$FAKE_EAS_BUILD";; update:view) printf '%s' "$FAKE_EAS_UPDATE";; esac`,
   })) {
     writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n${script}\n`);
     chmodSync(join(bin, name), 0o755);
@@ -255,6 +255,16 @@ describe('rnship release approve', () => {
     expect(s.rnship(['release', 'approve', 'rollback', 'group-1', '--to-embedded'], { FAKE_EAS_UPDATE: mixed }).code).toBe(1);
     expect(s.rnship(['release', 'approve', 'rollback', 'group-1', '--channel', 'staging'], { FAKE_EAS_UPDATE: updates(s.head) }).code).toBe(1);
     expect(s.calls().some((c) => /^eas update:(revert|roll-back)/.test(c))).toBe(false);
+  });
+
+  it('refuses an eas-cli other than the checked minor, before any other eas call', () => {
+    const s = sandbox();
+    const run = s.rnship(['release', 'approve', 'submit', 'build-1'], { FAKE_EAS_BUILD: build(), FAKE_EAS_VERSION: '25.0.1' });
+
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('eas-cli 25.0.1 isn\'t 24.13.x');
+    expect(s.calls()).toEqual(['eas --version']);
+    expect(s.rnship(['release', 'approve', 'submit', 'build-1'], { FAKE_EAS_BUILD: build(), FAKE_EAS_VERSION: '24.13.7' }).code).toBe(0);
   });
 
   it('refuses every release action as the agent user', () => {

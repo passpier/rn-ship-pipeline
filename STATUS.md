@@ -43,7 +43,7 @@ Last updated: 2026-10-17. This file is the source of truth for scope, progress a
 5. **M5** Flow A change-intake (change request, impact gate, baseline delta, design, `rnship change approve`, tasks).
 6. **M6** upgrade, perf budgets, store submission.
 
-Also pending: **S3** skills under `-p`. **S10** EAS `require-approval` (optional desk check; it can never be the gate). An **agent evaluation** suite (repeatable fixture cases scored per prompt, model and adapter), after the M3 acceptance.
+Also pending: **Agent provisioning** for another Mac. Creating `rnship-agent` (user, own group, Node 24, claude, the Xcode simulator index) lives only in spike wizards (`s0-identity.sh`, `m3.sh` stage 1, `s12.sh`), with the owner and paths hard-coded. It needs a real `rnship agent setup` before release. The product code itself already runs on any Apple Silicon Mac (checked 2026-10-17): the sandbox finds the boot volume and keeps open paths readable on other volumes, PR checks take an `rnship-repo` input for forks, release approvals refuse an eas-cli other than 24.13.x, worktrees get a git author if none is set, and sessions put rnship's own Node first on PATH. **S3** skills under `-p`. **S10** EAS `require-approval` (optional desk check; it can never be the gate). An **agent evaluation** suite (repeatable fixture cases scored per prompt, model and adapter), after the M3 acceptance.
 
 ## Open decisions
 
