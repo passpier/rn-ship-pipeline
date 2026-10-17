@@ -4,7 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { hostAllowed, NETWORK_ALLOWLIST, seatbeltProfile } from '@rnship/policy';
+import { hostAllowed, NETWORK_ALLOWLIST, SANDBOX_ENV, seatbeltProfile } from '@rnship/policy';
 
 // `rnship sandbox run -- <command>`: runs a validation command (tsc, jest, expo export,
 // …) under `sandbox-exec` with the Seatbelt profile from policy/src/sandbox.ts. The
@@ -79,6 +79,7 @@ export async function sandboxRun(command: string[], opts: { home: string; cwd?: 
       stdio: 'inherit',
       env: {
         ...process.env,
+        ...SANDBOX_ENV,
         HTTPS_PROXY: url,
         HTTP_PROXY: url,
         https_proxy: url,

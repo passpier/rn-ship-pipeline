@@ -18,6 +18,7 @@ export {
   hostAllowed,
   NETWORK_ALLOWLIST,
   PERSISTENCE_PATHS,
+  SANDBOX_ENV,
   SECRET_PATHS,
   seatbeltProfile,
 } from './sandbox.ts';

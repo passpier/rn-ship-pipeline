@@ -90,6 +90,10 @@ describe.skipIf(process.platform !== 'darwin')('rnship sandbox run', () => {
     expect(run.stderr).toContain('EPERM');
   });
 
+  it('turns off expo telemetry, which would write to ~/.expo', () => {
+    expect(sandboxed(`process.exit(process.env.EXPO_NO_TELEMETRY === '1' ? 0 : 3)`).status).toBe(0);
+  });
+
   it('blocks writing guardrail config under ~/.claude', () => {
     const run = sandboxed(`const p=require('path').join(require('os').homedir(),'.claude');require('fs').mkdirSync(p,{recursive:true});require('fs').writeFileSync(p+'/settings.json','{}')`);
     expect(run.status).not.toBe(0);

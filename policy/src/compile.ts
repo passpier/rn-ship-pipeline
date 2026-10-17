@@ -1,4 +1,4 @@
-import { claudeSandboxSettings } from './sandbox.ts';
+import { claudeSandboxSettings, SANDBOX_ENV } from './sandbox.ts';
 import type { Policy, Rule } from './schema.ts';
 
 // Paths the executor may never write, whatever the policy says: its own guardrails,
@@ -19,7 +19,7 @@ export type ExecutorSettings = {
   permissions: ClaudeSettings['permissions'] & { allow: string[] };
   disableAllHooks: false;
   enabledPlugins: Record<string, true>;
-  env: { RNSHIP_HOOK_RULES: string };
+  env: typeof SANDBOX_ENV & { RNSHIP_HOOK_RULES: string };
   sandbox: ReturnType<typeof claudeSandboxSettings>;
 };
 
@@ -62,7 +62,7 @@ export function compilePolicy(policy: Policy, opts: { codeowner?: string; hookRu
           permissions: { allow: EXECUTOR_ALLOW, deny: [...settings.permissions.deny, ...EXECUTOR_DENY], ask: settings.permissions.ask },
           disableAllHooks: false,
           enabledPlugins: { [GUARD_PLUGIN_ID]: true },
-          env: { RNSHIP_HOOK_RULES: opts.hookRulesPath },
+          env: { ...SANDBOX_ENV, RNSHIP_HOOK_RULES: opts.hookRulesPath },
           sandbox: claudeSandboxSettings(),
         }
       : undefined,

@@ -66,7 +66,7 @@ describe('rnship policy', () => {
     expect(settings).toMatchObject({
       disableAllHooks: false,
       enabledPlugins: { 'rnship@inline': true },
-      env: { RNSHIP_HOOK_RULES: join(out, 'hook-rules.json') },
+      env: { RNSHIP_HOOK_RULES: join(out, 'hook-rules.json'), EXPO_NO_TELEMETRY: '1' },
       sandbox: {
         enabled: true,
         allowUnsandboxedCommands: false,

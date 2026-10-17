@@ -29,6 +29,13 @@ export const PERSISTENCE_PATHS = [
   '~/.gitconfig',
 ];
 
+/**
+ * Env for both sandboxes. The expo CLI writes a telemetry ID to ~/.expo/state.json on
+ * every command, and ~/.expo is a secret path, so without this every `expo` command
+ * fails with EPERM (S12).
+ */
+export const SANDBOX_ENV = { EXPO_NO_TELEMETRY: '1' };
+
 /** Hosts validation and Bash commands may reach: the npm registry, GitHub, and Expo. */
 export const NETWORK_ALLOWLIST = [
   'registry.npmjs.org',
