@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { createServer as createTcpServer } from 'node:net';
+import { connect as connectTcp, createServer as createTcpServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,17 +24,37 @@ function connectThrough(port: number, target: string): Promise<number> {
 }
 
 describe('allowlisting proxy', () => {
-  it('tunnels to allowlisted hosts and refuses others', async () => {
+  it('tunnels to allowlisted hosts and refuses others, reporting each refusal', async () => {
     const upstream = createTcpServer((socket) => socket.end('hi')).listen(0, '127.0.0.1');
     await new Promise((r) => upstream.once('listening', r));
     const upstreamPort = (upstream.address() as { port: number }).port;
-    const proxy = await startProxy(['127.0.0.1']);
+    const refused: string[] = [];
+    const proxy = await startProxy(['127.0.0.1'], (target) => refused.push(target));
     try {
       expect(await connectThrough(proxy.port, `127.0.0.1:${upstreamPort}`)).toBe(200);
       expect(await connectThrough(proxy.port, 'evil.example.com:443')).toBe(403);
+      expect(refused).toEqual(['evil.example.com:443']);
     } finally {
       await proxy.close();
       upstream.close();
+    }
+  });
+
+  it('survives a client that resets after its 403', async () => {
+    const proxy = await startProxy(['127.0.0.1'], () => {});
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const socket = connectTcp(proxy.port, '127.0.0.1', () => socket.write('CONNECT evil.example.com:443 HTTP/1.1\r\n\r\n'));
+        socket.once('data', () => {
+          socket.resetAndDestroy();
+          resolve();
+        });
+        socket.once('error', reject);
+      });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(await connectThrough(proxy.port, 'evil.example.com:443')).toBe(403);
+    } finally {
+      await proxy.close();
     }
   });
 });
@@ -86,6 +106,7 @@ describe.skipIf(process.platform !== 'darwin')('rnship sandbox run', () => {
       `const u=new URL(process.env.HTTPS_PROXY);require('http').request({host:u.hostname,port:u.port,method:'CONNECT',path:'evil.example.com:443'}).on('connect',(r,s)=>{s.destroy();process.exit(r.statusCode===403?4:0)}).on('error',()=>process.exit(5)).end()`,
     );
     expect(run.status).toBe(4);
+    expect(run.stderr).toContain('rnship sandbox: refused evil.example.com:443');
   });
 
   it("blocks reading another user's home", () => {

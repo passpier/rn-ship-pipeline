@@ -9,18 +9,26 @@ import { hostAllowed, NETWORK_ALLOWLIST, seatbeltProfile } from '@rnship/policy'
 // `rnship sandbox run -- <command>`: runs a validation command (tsc, jest, expo export,
 // …) under `sandbox-exec` with the Seatbelt profile from policy/src/sandbox.ts. The
 // profile allows outbound network to localhost only; this process runs a CONNECT
-// proxy there that tunnels to allowlisted hosts, and points the child at it.
+// proxy there that tunnels to allowlisted hosts, and points the child at it. Each
+// refused target goes to stderr, so a failed build shows which hosts it needed.
 
 export type Proxy = { port: number; close(): Promise<void> };
 
-export function startProxy(allowlist: string[] = NETWORK_ALLOWLIST): Promise<Proxy> {
-  const server: Server = createServer((_req, res) => {
+export function startProxy(
+  allowlist: string[] = NETWORK_ALLOWLIST,
+  onRefused: (target: string) => void = (target) => process.stderr.write(`rnship sandbox: refused ${target}\n`),
+): Promise<Proxy> {
+  const server: Server = createServer((req, res) => {
+    onRefused(req.headers.host ?? req.url ?? '?');
     res.writeHead(403, { 'content-type': 'text/plain' });
     res.end('rnship sandbox: only HTTPS (CONNECT) to allowlisted hosts is proxied\n');
   });
   server.on('connect', (req, client, head) => {
+    // A client that resets after its 403 (curl does) must not crash the proxy.
+    client.on('error', () => client.destroy());
     const target = parseTarget(req.url ?? '');
     if (!target || !hostAllowed(target.host, allowlist)) {
+      onRefused(req.url ?? '?');
       client.end(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\n\r\nrnship sandbox: ${req.url} is not on the network allowlist\n`);
       return;
     }
