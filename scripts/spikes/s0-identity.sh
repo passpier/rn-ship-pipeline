@@ -263,9 +263,29 @@ fi
 id "$AGENT" >/dev/null 2>&1 && record S0_USER_EXISTS yes || { record S0_USER_EXISTS no; warn "no $AGENT user; stopping"; exit 1; }
 AGENT_UID=$(id -u "$AGENT")
 
+# sysadminctl puts new users in staff through PrimaryGroupID 20. Give the agent a group of
+# its own (as sandvault does), so staff-readable files outside your 700 home stay closed.
+# Before its first login, so its session never carries staff.
+in_staff() { id -Gn "$AGENT" | tr ' ' '\n' | grep -qx staff; }
+if in_staff; then
+  say "$AGENT is in staff; moving it to a group of its own (rnship-agent)."
+  dscl . -read "/Groups/$AGENT" >/dev/null 2>&1 || sudo dseditgroup -o create -r "rnship agent" "$AGENT"
+  sudo dscl . -create "/Users/$AGENT" PrimaryGroupID "$(dscl . -read "/Groups/$AGENT" PrimaryGroupID | awk '{print $2}')"
+  sudo dseditgroup -o edit -a "$AGENT" -t user "$AGENT"
+  sudo dseditgroup -o edit -d "$AGENT" -t user staff 2>/dev/null || true
+  sudo dscacheutil -flushcache
+  if sudo launchctl print "gui/$AGENT_UID" >/dev/null 2>&1; then
+    warn "$AGENT is logged in, and its session keeps staff until it logs out."
+    step "Switch to $AGENT, Apple menu → Log Out, then switch back (stage 2 logs it in again)."
+    pause "Press Enter when $AGENT is logged out"
+  fi
+fi
+record S0_AGENT_IN_STAFF "$(in_staff && echo yes || echo no)"
+
 # stage1_passed: an earlier run recorded every isolation check, all passing.
 stage1_passed() {
   [[ "$(_existing S0_USER_IS_ADMIN || true)" == no \
+    && "$(_existing S0_AGENT_IN_STAFF || true)" == no \
     && "$(_existing S0_AGENT_READS_KEYCHAIN_GH || true)" == no \
     && "$(_existing S0_AGENT_READS_KEYCHAIN_CLAUDE || true)" == no \
     && "$(_existing S0_AGENT_HAS_EXPO_SESSION || true)" == no ]] \

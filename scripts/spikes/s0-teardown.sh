@@ -126,6 +126,9 @@ else
     fi
   fi
 fi
+if dscl . -read /Groups/rnship-agent >/dev/null 2>&1; then
+  ask_run "Delete the rnship-agent group (the agent's own, instead of staff)?" sudo dseditgroup -o delete rnship-agent
+fi
 
 # ── 4. Local files ────────────────────────────────────────────────────────
 hr "4/5 · Local files"
