@@ -45,9 +45,9 @@ const USAGE = `usage:
       runtime back at the update embedded in their build (the rollback drill uses --channel staging)
       approvals run as your user (never rnship-agent) and refuse a digest that doesn't match the artifact
   rnship sandbox profile [--home <dir>]
-  rnship sandbox run [--home <dir>] -- <command...>
+  rnship sandbox run [--home <dir>] [--timeout <sec>] -- <command...>
       runs a validation command under sandbox-exec: no secrets, no persistence writes, network only via
-      an allowlisting localhost proxy
+      an allowlisting localhost proxy; --timeout stops it and exits 124
   rnship ota record <project-root> --out <dir> --build-id <id>
   rnship ota classify --base <project-root> --artifacts <dir> --candidate <project-root> [--policy <project-policy.yaml>]
   rnship signals poll --app <name> --repo <app-repo> --sentry-org <slug> --sentry-project <slug>
@@ -130,6 +130,7 @@ async function main(argv: string[]): Promise<void> {
       'from-branch': { type: 'string' },
       channel: { type: 'string' },
       home: { type: 'string' },
+      timeout: { type: 'string' },
       app: { type: 'string' },
       flow: { type: 'string' },
       db: { type: 'string' },
@@ -213,7 +214,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case 'sandbox run': {
-      process.exitCode = await sandboxRun(positionals, { home: values.home ?? homedir() });
+      const timeoutSec = values.timeout === undefined ? undefined : Number(values.timeout);
+      if (timeoutSec !== undefined && !(timeoutSec > 0)) throw new UsageError('--timeout must be a positive number of seconds');
+      process.exitCode = await sandboxRun(positionals, { home: values.home ?? homedir(), timeoutSec });
       return;
     }
     case 'ota record': {

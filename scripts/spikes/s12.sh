@@ -197,11 +197,15 @@ finish() {
 # (gitignored). No secrets are involved, and no claude -p calls.
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-PIPELINE_URL=https://github.com/passpier/rn-ship-pipeline
-AGENT=rnship-agent
-AGENT_HOME=/Users/$AGENT
+# The agent clones the repo you run this from (a fork clones itself), over https.
+PIPELINE_URL=$(git -C "$ROOT" remote get-url origin | sed -E 's#^git@([^:]+):#https://\1/#; s#\.git$##')
+AGENT=${RNSHIP_AGENT_USER:-rnship-agent}
+AGENT_HOME=$(dscl . -read "/Users/$AGENT" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+AGENT_HOME=${AGENT_HOME:-/Users/$AGENT}
 AGENT_RNSHIP=$AGENT_HOME/rnship
-AGENT_PATH=$AGENT_RNSHIP/node_modules/.bin:$AGENT_HOME/.local/node/bin:$AGENT_HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+# The agent finds pod where you do (Homebrew or not); it can't read anything under your home.
+POD_DIR=$(dirname "$(command -v pod 2>/dev/null || echo /missing/pod)")
+AGENT_PATH=$AGENT_RNSHIP/node_modules/.bin:$AGENT_HOME/.local/node/bin:$AGENT_HOME/.local/bin:$POD_DIR:/usr/bin:/bin:/usr/sbin:/sbin
 SHARED=/Users/Shared/rnship-s12 # scripts, logs, screenshots (yours, group $AGENT, 1770)
 APP=$AGENT_HOME/apps/s12
 WORK=${RNSHIP_FIXTURE_DIR:-$HOME/Home_Projects/rnship-s6-probe}
@@ -233,6 +237,7 @@ _env_dict() {
   printf '<key>PATH</key><string>%s</string>' "$AGENT_PATH"
   printf '<key>LANG</key><string>en_US.UTF-8</string>'
   printf '<key>S12_SHARED</key><string>%s</string>' "$SHARED"
+  printf '<key>S12_RUNTIME</key><string>%s</string>' "${RUNTIME:-}"
   printf '</dict>'
 }
 
@@ -329,7 +334,15 @@ step_run() {
   local runner=$1 label=$2 timeout=$3; shift 3
   local p rc
   p="S12_$(tr 'a-z-' 'A-Z_' <<<"$label")"
-  "$runner" "$label" "$timeout" /bin/sh "$SHARED/s12-step.sh" "$label" "$@" \
+  # An earlier run's keys for this step would read as this run's.
+  local k tmp
+  for k in "" _MINUTES _REFUSED _EPERM _NESTED_SANDBOX _RESULT _ERROR; do
+    [[ -f "$ENV_FILE" ]] || break
+    tmp=$(mktemp); grep -vE "^${p}${k}=" "$ENV_FILE" > "$tmp" || true; mv "$tmp" "$ENV_FILE"
+  done
+  # The sandbox stops the command a little before the wizard gives up on the job, so a hang
+  # still leaves a summary (exit 124) instead of a bare timeout.
+  "$runner" "$label" "$timeout" /bin/sh "$SHARED/s12-step.sh" "$label" "$((timeout - 120))" "$@" \
     || { record "$p" "timeout"; return 1; }
   rc=$(logval "$label" exit)
   record "$p" "$([[ $rc == 0 ]] && echo ok || echo "fail:${rc:-?}")"
@@ -337,6 +350,7 @@ step_run() {
   record "${p}_REFUSED" "$(logval "$label" refused)"
   record "${p}_EPERM" "$(logval "$label" eperm)"
   record "${p}_NESTED_SANDBOX" "$(logval "$label" nested)"
+  [[ "$(logval "$label" watchman)" == waited ]] && record "${p}_RESULT" "watchman_waited"
   [[ -n "$(logval "$label" result)" ]] && record "${p}_RESULT" "$(logval "$label" result)"
   if [[ $rc != 0 ]]; then
     record "${p}_ERROR" "$(logval "$label" first_error)"
@@ -373,13 +387,18 @@ banner "S12: local iOS simulator builds as $AGENT"
 # ── 1 ─────────────────────────────────────────────────────────────────────
 stage "Preflight"
 [[ $EUID -ne 0 && "$(id -un)" != "$AGENT" ]] || fail "run this as your own macOS user"
+[[ "$(uname -m)" == arm64 ]] || fail "rn-ship-pipeline supports Apple Silicon Macs only"
 for c in jq git node npx xcodebuild xcrun pod sudo; do command -v "$c" >/dev/null || fail "missing $c"; done
+[[ $POD_DIR != "$HOME"* ]] || fail "pod is under your home ($POD_DIR), which $AGENT can't read: install CocoaPods with Homebrew"
 node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' || fail "need Node 24 (nvm use 24)"
 XCODE=$(xcodebuild -version | sed -n 1p)
 record S12_XCODE "$XCODE"
 [[ $XCODE == "Xcode 26.3" ]] || warn "ADR 0003 assumes Xcode 26.3; this is $XCODE"
-RUNTIME=$(xcrun simctl list -j runtimes | jq -r '[.runtimes[] | select(.isAvailable and .platform == "iOS" and (.version | startswith("26.3")))][0].identifier // empty')
-[[ -n "$RUNTIME" ]] || fail "no iOS 26.3 simulator runtime: Xcode → Settings → Components"
+# The newest installed iOS runtime; ADR 0003 assumes 26.3 on Xcode 26.3, other Macs may differ.
+RUNTIME_JSON=$(xcrun simctl list -j runtimes | jq -c '[.runtimes[] | select(.isAvailable and .platform == "iOS")] | sort_by(.version | split(".") | map(tonumber)) | last // empty')
+[[ -n "$RUNTIME_JSON" ]] || fail "no iOS simulator runtime: Xcode → Settings → Components"
+RUNTIME=$(jq -r .identifier <<<"$RUNTIME_JSON")
+[[ "$(jq -r .version <<<"$RUNTIME_JSON")" == 26.3* ]] || warn "ADR 0003 assumes an iOS 26.3 runtime; using $(jq -r .version <<<"$RUNTIME_JSON")"
 record S12_RUNTIME "$RUNTIME"
 say "sudo runs every agent step; enter your password once."
 sudo -v
@@ -391,7 +410,7 @@ AGENT_UID=$(id -u "$AGENT" 2>/dev/null) || fail "no $AGENT user: run scripts/spi
 dscl . -read "/Groups/$AGENT" >/dev/null 2>&1 && ! in_staff \
   || fail "$AGENT must have its own group, not staff: run scripts/acceptance/m3.sh stage 1 first"
 [[ "$(as_agent node -v 2>/dev/null)" == v24.* ]] || fail "$AGENT has no Node 24 in ~/.local/node (S0)"
-POD=$(as_agent pod --version 2>/dev/null) || fail "$AGENT can't run /opt/homebrew/bin/pod"
+POD=$(as_agent pod --version 2>/dev/null) || fail "$AGENT can't run $POD_DIR/pod"
 record S12_POD "$POD"
 git -C "$ROOT" fetch -q origin main
 [[ -z "$(git -C "$ROOT" status --porcelain)" ]] || fail "uncommitted changes in $ROOT: the agent runs what's on origin/main"
@@ -444,20 +463,21 @@ if ! sudo test -e "$APP"; then
   as_agent_sh "cd apps/s12 && npm ci --no-audit --no-fund --loglevel=error"
 fi
 
-# s12-step.sh LABEL sandboxed|plain SCRIPT ARGS... is the job every stage runs. It copies
+# s12-step.sh LABEL SECS sandboxed|plain SCRIPT ARGS... is the job every stage runs. It copies
 # SCRIPT into the agent's home (the sandbox can't read /Users/Shared), runs it in the fixture
-# clone with its output in ~/s12-LABEL.full.log, and prints a summary the wizard reads.
+# clone with its output in ~/s12-LABEL.full.log (sandboxed: stopped after SECS), and prints
+# a summary the wizard reads.
 cat > "$SHARED/s12-step.sh" <<'STEP'
 #!/bin/sh
 set -u
-label=$1 mode=$2 script=$3; shift 3
+label=$1 secs=$2 mode=$3 script=$4; shift 4
 full="$HOME/s12-$label.full.log"
 cp "$S12_SHARED/$script" "$HOME/.s12-$script" || { echo "exit=copy"; exit 1; }
 cd "$HOME/apps/s12" || { echo "exit=cd"; exit 1; }
 echo "groups=$(id -Gn)"
 start=$(date +%s)
 if [ "$mode" = sandboxed ]; then
-  rnship sandbox run --home "$HOME" -- /bin/sh "$HOME/.s12-$script" "$@" > "$full" 2>&1
+  rnship sandbox run --home "$HOME" --timeout "$secs" -- /bin/sh "$HOME/.s12-$script" "$@" > "$full" 2>&1
 else
   /bin/sh "$HOME/.s12-$script" "$@" > "$full" 2>&1
 fi
@@ -467,6 +487,7 @@ echo "exit=$rc"
 echo "secs=$(( $(date +%s) - start ))"
 echo "refused=$(grep -o 'rnship sandbox: refused [^ ]*' "$full" | cut -d' ' -f4 | sort -u | paste -sd, -)"
 echo "nested=$(grep -q 'sandbox_apply' "$full" && echo yes || echo no)"
+echo "watchman=$(grep -q 'Waiting for Watchman' "$full" && echo waited || echo no)"
 echo "eperm=$(grep -c 'Operation not permitted' "$full")"
 echo "first_error=$(grep -m1 -E '(^|[[:space:]])(error|Error|ERROR)[: ]' "$full" | cut -c1-200)"
 grep '^result=' "$full" | tail -n1
@@ -508,7 +529,7 @@ at() { echo "result=$1"; exit 1; }
 app=$(ls -d "$HOME"/s12-dd/Build/Products/Release-iphonesimulator/*.app 2>/dev/null | head -n1)
 [ -n "$app" ] || at no_app
 bid=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist") || at no_bundle_id
-pick=$(xcrun simctl list -j runtimes | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8"));const r=j.runtimes.find(r=>r.isAvailable&&r.platform==="iOS"&&r.version.startsWith("26.3"));const d=r&&(r.supportedDeviceTypes||[]).find(t=>t.productFamily==="iPhone");if(!d)process.exit(1);console.log(r.identifier,d.identifier)') || at no_runtime
+pick=$(xcrun simctl list -j runtimes | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8"));const r=j.runtimes.find(r=>r.identifier===process.env.S12_RUNTIME);const d=r&&(r.supportedDeviceTypes||[]).find(t=>t.productFamily==="iPhone");if(!d)process.exit(1);console.log(r.identifier,d.identifier)') || at no_runtime
 set -- $pick
 udid=$(xcrun simctl create "rnship-s12-$label" "$2" "$1") || at create
 xcrun simctl bootstatus "$udid" -b || at boot
@@ -526,11 +547,17 @@ pause
 # ── 4 ─────────────────────────────────────────────────────────────────────
 stage "Q1: prebuild + pod install, headless, sandboxed"
 say "First the dependency fetch alone, under rnship sandbox run and its network allowlist."
+if confirm "Clear $AGENT's CocoaPods spec repo and cache first, so the fetch sees the hosts a fresh Mac needs?"; then
+  as_agent_sh 'rm -rf .cocoapods/repos Library/Caches/CocoaPods'
+  record S12_FETCH_FRESH_PODS yes
+else
+  record S12_FETCH_FRESH_PODS no
+fi
 headless_session S12_FETCH_GUI_SESSION
-if ! step_run run_headless fetch-sandboxed 3600 sandboxed fetch.sh; then
+if ! step_run run_headless fetch-sandboxed 2700 sandboxed fetch.sh; then
   warn "The sandboxed fetch failed. Refused hosts: $(logval fetch-sandboxed refused)"
   say "Fetching once more outside the sandbox, so the build can still be tested."
-  step_run run_headless fetch-plain 3600 plain fetch.sh || fail "the fetch fails outside the sandbox too: see $SHARED/fetch-plain.log"
+  step_run run_headless fetch-plain 2700 plain fetch.sh || fail "the fetch fails outside the sandbox too: see $SHARED/fetch-plain.log"
 fi
 record S12_HEADLESS_GROUPS "$(logval fetch-sandboxed groups)"
 pause
@@ -540,13 +567,13 @@ stage "Q1: Release simulator build, headless, sandboxed"
 note "An RN release build takes 5–20 minutes."
 headless_session S12_BUILD_GUI_SESSION
 BUILD_ARGS=()
-if step_run run_headless build-headless 5400 sandboxed build.sh; then
+if step_run run_headless build-headless 2700 sandboxed build.sh; then
   BUILT=headless
 elif [[ "$(logval build-headless nested)" == yes ]]; then
   warn "Xcode's script sandbox couldn't nest inside ours (sandbox_apply)."
   say "Retrying with ENABLE_USER_SCRIPT_SANDBOXING=NO."
   BUILD_ARGS=(ENABLE_USER_SCRIPT_SANDBOXING=NO)
-  step_run run_headless build-headless-noscriptsandbox 5400 sandboxed build.sh "${BUILD_ARGS[@]}" \
+  step_run run_headless build-headless-noscriptsandbox 2700 sandboxed build.sh "${BUILD_ARGS[@]}" \
     && BUILT=headless-noscriptsandbox || BUILT=""
 else
   BUILT=""
@@ -554,7 +581,7 @@ fi
 if [[ -z "$BUILT" ]]; then
   warn "The headless build failed. Trying the same build in $AGENT's GUI session."
   need_session "The GUI-session build"
-  step_run run_in_agent_session build-gui 5400 sandboxed build.sh ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
+  step_run run_in_agent_session build-gui 2700 sandboxed build.sh ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
     && BUILT=gui || fail "the build fails in the GUI session too: see $SHARED/build-gui.log"
 fi
 record S12_BUILT_BY "$BUILT"

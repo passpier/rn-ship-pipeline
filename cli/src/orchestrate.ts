@@ -19,7 +19,7 @@ import {
 import { loadBasePolicy, loadPolicy, mergePolicy } from '@rnship/policy';
 import { ApprovalError, stateDir, writeApproval } from '@rnship/release';
 import { policyCheck } from './check.ts';
-import { sandboxRun } from './sandbox.ts';
+import { sandboxRun, TIMED_OUT } from './sandbox.ts';
 
 // Wiring for `rnship tick`, `rnship tasks …` and `rnship task approve`. The orchestrator
 // package takes its diff check and validation runner as functions, so the CLI plugs in
@@ -50,10 +50,14 @@ export const policyDiffCheck: DiffCheck = ({ root, baseRef, repo }) => {
   return { ok: result.ok, gates: result.gates.map((g) => ({ ruleId: g.ruleId, matches: g.matches })) };
 };
 
+/** A validation command that runs longer than this is stopped, so a hang can't hold the tick lock. */
+export const VALIDATION_TIMEOUT_SEC = 1800;
+
 /** Each validation command under the validation sandbox, stopping at the first failure. */
 export const sandboxValidate: Validate = async ({ cwd, commands }) => {
   for (const command of commands) {
-    const code = await sandboxRun(['/bin/sh', '-c', command], { home: homedir(), cwd });
+    const code = await sandboxRun(['/bin/sh', '-c', command], { home: homedir(), cwd, timeoutSec: VALIDATION_TIMEOUT_SEC });
+    if (code === TIMED_OUT) return { ok: false, digest: `\`${command}\` timed out after ${VALIDATION_TIMEOUT_SEC}s` };
     if (code !== 0) return { ok: false, digest: `\`${command}\` exited ${code}` };
   }
   return { ok: true };

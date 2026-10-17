@@ -62,7 +62,13 @@ function parseTarget(url: string): { host: string; port: number } | undefined {
   return m ? { host: m[1]!, port: Number(m[2]) } : undefined;
 }
 
-export async function sandboxRun(command: string[], opts: { home: string; cwd?: string; allowlist?: string[] }): Promise<number> {
+/** Exit code of a run stopped by `timeoutSec`, as coreutils `timeout` uses. */
+export const TIMED_OUT = 124;
+
+export async function sandboxRun(
+  command: string[],
+  opts: { home: string; cwd?: string; allowlist?: string[]; timeoutSec?: number },
+): Promise<number> {
   if (process.platform !== 'darwin') throw new Error('rnship sandbox run needs macOS sandbox-exec');
   if (command.length === 0) throw new Error('no command to run');
   const dir = mkdtempSync(join(tmpdir(), 'rnship-sandbox-'));
@@ -74,9 +80,11 @@ export async function sandboxRun(command: string[], opts: { home: string; cwd?: 
   const proxy = await startProxy(opts.allowlist);
   const url = `http://127.0.0.1:${proxy.port}`;
   try {
+    // With a timeout the command gets its own process group, so the whole tree can be stopped.
     const child = spawn('sandbox-exec', ['-f', profile, ...command], {
       cwd: opts.cwd,
       stdio: 'inherit',
+      detached: opts.timeoutSec !== undefined,
       env: {
         ...process.env,
         ...SANDBOX_ENV,
@@ -89,8 +97,31 @@ export async function sandboxRun(command: string[], opts: { home: string; cwd?: 
       },
     });
     return await new Promise<number>((resolve, reject) => {
+      let timedOut = false;
+      const timers: NodeJS.Timeout[] = [];
+      const stop = (signal: NodeJS.Signals) => {
+        try {
+          process.kill(-child.pid!, signal);
+        } catch {
+          // The group is already gone.
+        }
+      };
+      if (opts.timeoutSec !== undefined) {
+        timers.push(
+          setTimeout(() => {
+            timedOut = true;
+            process.stderr.write(`rnship sandbox: stopped after ${opts.timeoutSec}s\n`);
+            stop('SIGTERM');
+            timers.push(setTimeout(() => stop('SIGKILL'), 5000));
+          }, opts.timeoutSec * 1000),
+        );
+      }
       child.once('error', reject);
-      child.once('exit', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
+      child.once('exit', (code, signal) => {
+        timers.forEach(clearTimeout);
+        if (timedOut) stop('SIGKILL');
+        resolve(timedOut ? TIMED_OUT : (code ?? (signal ? 128 : 1)));
+      });
     });
   } finally {
     await proxy.close();

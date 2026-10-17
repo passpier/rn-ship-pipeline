@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 
 // One source for what agent-run code may not touch. Both the Claude Code sandbox
@@ -36,7 +36,13 @@ export const PERSISTENCE_PATHS = [
  */
 export const SANDBOX_ENV = { EXPO_NO_TELEMETRY: '1' };
 
-/** Hosts validation and Bash commands may reach: the npm registry, GitHub, and Expo. */
+/**
+ * Hosts validation and Bash commands may reach: the npm registry, GitHub, Expo, the
+ * CocoaPods spec CDN, and Maven Central's read-only mirror, where React Native's iOS pods
+ * (hermes-engine, React-Core-prebuilt, ReactNativeDependencies) get their prebuilt
+ * tarballs (S12). Not central.sonatype.com: it only serves nightlies, and it's where
+ * artifacts are published.
+ */
 export const NETWORK_ALLOWLIST = [
   'registry.npmjs.org',
   'github.com',
@@ -46,6 +52,8 @@ export const NETWORK_ALLOWLIST = [
   'raw.githubusercontent.com',
   'api.expo.dev',
   'exp.host',
+  'cdn.cocoapods.org',
+  'repo1.maven.org',
 ];
 
 export function hostAllowed(host: string, allowlist: string[] = NETWORK_ALLOWLIST): boolean {
@@ -84,32 +92,31 @@ const MOUNT_SERVICES = [
 
 /**
  * A `sandbox-exec` (Seatbelt) profile for validation commands. Everything is allowed
- * except reading other users' homes (only `home` and the `readable` paths stay open
- * under /Users), mounted volumes, raw disks and system keychains; mounting; reading or
- * writing secrets; writing persistence paths; and outbound network other than
- * localhost. SBPL can't match hostnames, so allowlisted hosts are reached through the
- * localhost proxy that `rnship sandbox run` starts. The /Users rules follow sandvault's
- * profile (github.com/webcoyote/sandvault).
+ * except reading other users' homes and mounted volumes (only `home` and the `readable`
+ * paths stay open, wherever they are), raw disks and system keychains; mounting; reading
+ * or writing secrets; writing persistence paths; Watchman; and outbound network other
+ * than localhost. SBPL can't match hostnames, so allowlisted hosts are reached through
+ * the localhost proxy that `rnship sandbox run` starts. The /Users rules follow
+ * sandvault's profile (github.com/webcoyote/sandvault).
  */
-export function seatbeltProfile(opts: { home: string; readable?: string[] }): string {
+export function seatbeltProfile(opts: { home: string; readable?: string[]; bootVolume?: string }): string {
   const paths = (list: string[]) => list.map((p) => `  (subpath ${sbplString(realHomePath(p, opts.home))})`).join('\n');
   const open = [opts.home, ...(opts.readable ?? [])].map((p) => realHomePath(p, opts.home));
   // Path lookup stats each parent, so the parents of an open path keep their metadata.
-  const parents = [...new Set(open.flatMap(ancestors))].filter((p) => p.startsWith('/Users/'));
+  const parents = [...new Set(['/Users', ...open.flatMap(ancestors)])].filter((p) => CLOSED_ROOTS.some((root) => p === root || p.startsWith(`${root}/`)));
   const literals = (list: string[]) => list.map((p) => `  (literal ${sbplString(p)})`).join('\n');
+  const boot = opts.bootVolume ?? bootVolume();
   return `(version 1)
 (allow default)
-; Other users' homes: no reads. First, so the secret denies below still win inside the
-; open paths (the last matching rule applies).
-(deny file-read* (subpath "/Users"))
-(allow file-read-metadata
-  (literal "/Users")
+; Other users' homes and mounted volumes (except the boot volume's link): no reads. First,
+; so the open paths below reopen their part, and the secret denies after them still win
+; inside (the last matching rule applies).
+(deny file-read* (subpath "/Users") (subpath "/Volumes"))
+${boot ? `(allow file-read* (literal ${sbplString(`/Volumes/${boot}`)}))\n` : ''}(allow file-read-metadata
 ${literals(parents)})
 (allow file-read*
 ${open.map((p) => `  (subpath ${sbplString(p)})`).join('\n')})
-; Mounted volumes except the boot volume's link, raw disks, packet capture: no access.
-(deny file-read* (subpath "/Volumes"))
-(allow file-read* (literal "/Volumes/Macintosh HD"))
+; Raw disks, packet capture: no access.
 (deny file-read* file-write*
   (regex #"^(/private)?/dev/r?disk")
   (regex #"^(/private)?/dev/bpf"))
@@ -130,7 +137,23 @@ ${paths(PERSISTENCE_PATHS)})
 (deny network-outbound)
 (allow network-outbound (remote ip "localhost:*"))
 (allow network-outbound (remote unix-socket))
+; Watchman: its daemon can't start in here (it installs a LaunchAgent), and Metro then
+; waits for it forever (S12). Without the binary, Metro and jest use their node crawler.
+; A daemon already running outside runs \`trigger\` commands unsandboxed: no connecting.
+(deny process-exec (regex #"/watchman$"))
+(deny network-outbound (remote unix-socket (path-regex #"/watchman/[^/]+-state/")))
 `;
+}
+
+const CLOSED_ROOTS = ['/Users', '/Volumes'];
+
+// The /Volumes entry that links to /, whatever the boot volume is called.
+function bootVolume(): string | undefined {
+  try {
+    return readdirSync('/Volumes').find((name) => realpathSync(join('/Volumes', name)) === '/');
+  } catch {
+    return undefined;
+  }
 }
 
 // Seatbelt matches resolved paths, so expand `~` and resolve symlinks such as /var → /private/var.

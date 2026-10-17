@@ -60,11 +60,28 @@ describe('allowlisting proxy', () => {
 });
 
 describe('seatbelt profile', () => {
+  const closed = '(deny file-read* (subpath "/Users") (subpath "/Volumes"))';
+
   it('opens the home under /Users before the secret denies, so they still win', () => {
     const profile = seatbeltProfile({ home: '/Users/rnship-test-agent' });
     const open = profile.indexOf('(allow file-read*\n  (subpath "/Users/rnship-test-agent")');
-    expect(open).toBeGreaterThan(profile.indexOf('(deny file-read* (subpath "/Users"))'));
+    expect(profile.indexOf(closed)).toBeGreaterThan(-1);
+    expect(open).toBeGreaterThan(profile.indexOf(closed));
     expect(profile.indexOf('(subpath "/Users/rnship-test-agent/.expo")')).toBeGreaterThan(open);
+  });
+
+  it('reopens a worktree on another volume after closing /Volumes', () => {
+    const profile = seatbeltProfile({ home: '/Users/rnship-test-agent', readable: ['/Volumes/Work/app'], bootVolume: 'Data Disk' });
+    expect(profile.indexOf('(subpath "/Volumes/Work/app")')).toBeGreaterThan(profile.indexOf(closed));
+    expect(profile).toContain('(literal "/Volumes/Data Disk")');
+    expect(profile).toContain('(literal "/Volumes/Work")');
+    expect(profile).not.toContain('Macintosh HD');
+  });
+
+  it('denies Watchman after the unix-socket allow, so the deny wins', () => {
+    const profile = seatbeltProfile({ home: '/Users/rnship-test-agent' });
+    expect(profile.indexOf('(remote unix-socket (path-regex #"/watchman/')).toBeGreaterThan(profile.indexOf('(allow network-outbound (remote unix-socket))'));
+    expect(profile).toContain('(deny process-exec (regex #"/watchman$"))');
   });
 });
 
@@ -126,6 +143,32 @@ describe.skipIf(process.platform !== 'darwin')('rnship sandbox run', () => {
       expect(run.stderr, dir).toContain('EPERM');
     }
     expect(sandboxed(`require('fs').readFileSync('/Library/Keychains/System.keychain')`).status).toBe(0);
+  });
+
+  it("can't run watchman, whose daemon would leave Metro waiting forever", () => {
+    const bin = mkdtempSync(join(tmpdir(), 'rnship-bin-'));
+    writeFileSync(join(bin, 'watchman'), '#!/bin/sh\nsleep 600\n', { mode: 0o755 });
+    const run = spawnSync(process.execPath, [MAIN, 'sandbox', 'run', '--', process.execPath, '-e', `require('child_process').execFileSync('watchman',['version'])`], {
+      cwd: work,
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      timeout: 30_000,
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('EPERM');
+  });
+
+  it('stops a command that outlives --timeout', () => {
+    const start = Date.now();
+    const run = spawnSync(process.execPath, [MAIN, 'sandbox', 'run', '--timeout', '1', '--', '/bin/sh', '-c', 'sleep 30; sleep 30'], {
+      cwd: work,
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home },
+      timeout: 30_000,
+    });
+    expect(run.status).toBe(124);
+    expect(run.stderr).toContain('rnship sandbox: stopped after 1s');
+    expect(Date.now() - start).toBeLessThan(15_000);
   });
 
   it('lets the command read and write its worktree', () => {
