@@ -3,7 +3,9 @@ import { fenced, oneLine } from './text.ts';
 
 // The prompts of the `claude-p` adapter: one per task (D4), and one for the review pass.
 // Task bodies and failure digests are data inside fences. Validation commands are listed
-// for Claude to run as feedback; the orchestrator re-runs them itself either way. The
+// for Claude to run as feedback; the orchestrator re-runs them itself either way, under
+// `rnship sandbox run`. Claude runs them bare: its Bash sandbox already applies the same
+// denies and network allowlist, and macOS refuses a `sandbox-exec` nested inside it. The
 // session ends by printing a signal; only the final `result` text counts.
 
 export const SIGNALS = {
@@ -12,10 +14,8 @@ export const SIGNALS = {
   reviewDone: '<<<RNSHIP:REVIEW_DONE>>>',
 } as const;
 
-const SANDBOX = 'rnship sandbox run --';
-
 function validationLines(commands: string[]): string[] {
-  return [...new Set(commands)].map((c) => `- \`${SANDBOX} ${c}\``);
+  return [...new Set(commands)].map((c) => `- \`${c}\``);
 }
 
 export function renderTaskPrompt(task: ExecTask, opts: { failureDigest?: string } = {}): string {

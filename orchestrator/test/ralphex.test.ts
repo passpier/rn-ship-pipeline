@@ -36,7 +36,9 @@ describe('ralphex plan', () => {
   it('renders tasks ralphex can parse, and reads back which ones are ticked', () => {
     const plan = renderPlan({ tasks: [task(1, 'a'), task(2, 'b')] });
     expect(plan).toContain('### Task 1: Task a');
-    expect(plan).toContain('- `rnship sandbox run -- pnpm test`');
+    // Bare: Claude's Bash sandbox can't nest `rnship sandbox run` (sandbox-exec refuses).
+    expect(plan).toContain('- `pnpm test`');
+    expect(plan).not.toContain('rnship sandbox run');
     expect(completedTaskNumbers(plan)).toEqual([]);
 
     const firstDone = plan.replace(/### Task 1:[\s\S]*?(?=### Task 2:)/, (section) => section.replaceAll('- [ ]', '- [x]'));
